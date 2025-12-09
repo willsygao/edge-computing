@@ -1,0 +1,143 @@
+\documentclass[UTF8, a4paper, 12pt]{ctexart}
+
+% 导入必要的宏包
+\usepackage{geometry}       % 页面布局
+\usepackage{amsmath, amssymb} % 数学公式
+\usepackage{graphicx}       % 图片支持
+\usepackage{hyperref}       % 超链接
+\usepackage{enumitem}       % 列表格式
+\usepackage{float}          % 图片浮动控制
+\usepackage{xcolor}         % 颜色支持
+
+% 页面边距设置
+\geometry{left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+
+% 标题信息
+\title{\textbf{汇报大纲：端边协同下的多移动机器人任务卸载与资源分配研究}}
+\author{}
+
+\begin{document}
+
+\maketitle
+
+\section{研究背景与动机 (Introduction \& Motivation)}
+
+\subsection{场景描述 (Scenario)}
+\begin{itemize}
+    \item \textbf{背景：} 工业物联网（IIoT）环境，涉及多移动机器人（Mobile Robots）协同作业。
+    \item \textbf{架构：} 边缘计算（Edge Computing）架构，由多个边缘服务器节点构成异构网络。
+    \item \textbf{特征：} 机器人产生大量计算密集型任务（如SLAM、图像识别），但自身计算资源与电量有限。
+\end{itemize}
+
+\subsection{面临的挑战 (Key Challenges)}
+\begin{itemize}
+    \item \textbf{网络拓扑高动态性：} 机器人移动导致链路不稳定，服务节点信号重叠覆盖。
+    \item \textbf{任务与资源异构性：} 任务紧迫度不同，服务器负载不均衡。
+    \item \textbf{资源稀缺性：} 计算资源有限，需要在“本地”以及“全部可以卸载的目标服务器”之间做权衡。
+\end{itemize}
+
+\subsection{核心科学问题 (Research Question)}
+在动态、异构的IIoT环境下，如何\textbf{联合优化}移动机器人的\textbf{任务卸载决策}与边缘服务器的\textbf{计算资源分配}？
+
+\textbf{优化目标：} 在满足任务截止期限（Deadline）的前提下，最小化系统的\textbf{平均任务处理延迟}与\textbf{机器人能耗}（即系统总成本）。
+
+\section{系统建模与问题定义 (System Modeling)}
+
+\subsection{问题建模}
+\begin{itemize}
+    \item \textbf{模型类型：} 将场景建模为一个\textbf{部分可观测马尔可夫决策过程 (POMDP)}。
+    \item \textbf{原因：} 单个机器人无法获取全局网络状态，只能基于局部观测进行决策。
+\end{itemize}
+
+\subsection{优化目标函数}
+根据系统设定，优化目标函数 $OG(t)$ 定义如下：
+
+\begin{equation}
+    OG(t) = \sum_{i \in U} \sum_{a \in \{0, E\}} \phi_{i}^{a}(t) \cdot p_{i}^{b}(t) \cdot \left( U_{i}^{a}(t) + U_{j}^{i}(t) \right)
+\end{equation}
+
+\noindent \textit{注：公式符号含义需结合具体论文定义，此处$\phi$通常代表卸载决策，$p$代表功率或惩罚项，$U$代表效用或成本（时延+能耗）。}
+
+\section{解决方案——核心算法 (Methodology)}
+
+\subsection{总体框架}
+采用\textbf{端边协同的闭环自适应优化框架}。
+
+% 插入架构图
+\begin{figure}[H]
+    \centering
+    % width=1.0\textwidth 表示让图片宽度撑满文档的版心宽度
+    % 如果图片太大或太小，可以调整这个数字，比如 0.8\textwidth
+    \includegraphics[width=1.0\textwidth]{jiagou.png} 
+    
+    \caption{端边协同系统架构图}
+    \label{fig:framework}
+\end{figure}
+
+\subsection{模块一：服务器侧——智能资源调度 (Server-Side Strategy)}
+\begin{itemize}
+    \item \textbf{策略名称：} 基于多级优先级队列的动态资源分配。
+    \item \textbf{创新机制：} 引入\textbf{优先级分数 (Composite Priority Score)}。
+    \begin{itemize}
+        \item \textbf{紧迫度 (Urgency)：} 剩余时间越少，优先级越高（保障实时性）。
+        \item \textbf{资源需求 (Resource Demand)：} 避免大任务长期霸占资源（兼顾公平性与吞吐量）。
+    \end{itemize}
+    \item \textbf{作用：} 解决传统FIFO（先进先出）导致的紧急任务超时问题。
+\end{itemize}
+
+\subsection{模块二：机器人侧——智能卸载决策 (Robot-Side Strategy)}
+\begin{itemize}
+    \item \textbf{策略名称：} 基于多头自注意力机制 (Multi-Head Self-Attention) 的多智能体任务卸载。
+    \item \textbf{决策核心 (MAPPO)：}
+    \begin{itemize}
+        \item \textbf{状态空间 (State)：} 包含本地信息（位置、任务信息） 以及 网络感知信息（通过“心跳健康检测”和“信令交互”获取的信道质量、服务器负载、优先级队列信息）。
+        \item \textbf{动作空间 (Action)：} 选择本地执行 OR 卸载到特定目标服务器。
+        \item \textbf{奖励函数 (Reward)：} 基于上述 $OG(t)$ 的负相关值。
+    \end{itemize}
+\end{itemize}
+
+\section{主要创新点与亮点 (Highlights \& Contributions)}
+
+\subsection{端边协同的闭环自适应优化框架}
+\begin{itemize}
+    \item \textbf{上层 (Robot Side)：} 基于注意力增强的分布式策略学习，解决多智能体协作中的“状态空间爆炸”与“观测局限”问题。
+    \item \textbf{下层 (Server Side)：} 基于多维特征感知的动态资源编排，解决异构任务在资源竞争中的“实时性”与“公平性”权衡问题。
+\end{itemize}
+
+\subsection{基于多头注意力机制的时空特征提取}
+\begin{itemize}
+    \item \textbf{痛点解决：} 解决传统MAPPO在面对大量机器人和动态环境时决策“噪声”大、收敛慢的问题。
+    \item \textbf{机制效果：}
+    \begin{itemize}
+        \item \textbf{主动聚焦 (Attentional Focus)：} 动态计算不同服务器节点（如CSI、负载）的权重，自动过滤低价值信息。
+        \item \textbf{隐式协作：} 智能体能自适应地衡量服务器重要性（例如：高负载但链路质量极佳），避免拥塞。
+        \item \textbf{性能提升：} 增强了算法在动态拓扑下的\textbf{鲁棒性 (Robustness)} 和 \textbf{可扩展性 (Scalability)}。
+    \end{itemize}
+\end{itemize}
+
+\subsection{多维动态优先级资源分配}
+\begin{itemize}
+    \item \textbf{闭环调整：} 任务进入 Tasks Pool 后，基于截止期划分 High/Medium/Low 队列，并引入资源需求评分。执行单元实时反馈负载，动态调整下一时刻各队列资源分配比例。
+    \item \textbf{学术价值：} 解决了高负载下的\textbf{任务饥饿 (Task Starvation)} 问题，实现了资源利用率与时延满足率的帕累托优化 (Pareto Optimization)。
+\end{itemize}
+
+\subsection{物理感知驱动的跨层交互协议}
+利用物理层信道状态信息 (CSI) 和应用层信令 (Signaling) 作为桥梁，将环境的不确定性显式地输入到智能体的观测空间中。
+
+\section{实验验证 (Experiments \& Analysis)}
+
+\subsection{对比基准 (Baselines)}
+\begin{enumerate}
+    \item \textbf{Local Execution (LE):} 所有任务强制在本地执行。预期结果为高延迟、高能耗、大量超时。
+    \item \textbf{Nearest Offloading (NO):} 总是卸载到最近的服务器。预期容易导致“热点问题”。
+    \item \textbf{MADDPG:} 多智能体领域常用基线，但缺乏注意力机制处理动态拓扑，训练稳定性较差。
+    \item \textbf{Standard MAPPO:} 原始MAPPO算法（无Attention和优先级队列），用于证明本方案改进的有效性。
+\end{enumerate}
+
+\subsection{消融实验 (Ablation Studies)}
+\begin{itemize}
+    \item \textbf{PA-MAPPO w/o Attention:} 移除多头注意力机制。旨在证明注意力机制在提取关键服务器特征方面的作用。
+    \item \textbf{PA-MAPPO w/o Priority Queue:} 服务器侧使用标准FIFO队列。旨在证明动态优先级机制在资源紧张时能降低紧急任务超时率。
+\end{itemize}
+
+\end{document}
