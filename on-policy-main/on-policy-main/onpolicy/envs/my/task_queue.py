@@ -32,11 +32,20 @@ class ComputeTask:
     remaining_computation: Optional[float] = None  # 剩余计算量
     completion_slot: Optional[int] = None
     failure_reason: Optional[str] = None
+    failure_slot: Optional[int] = None
+    alloc_traj: List[float] = None
+    energy_total: float = 0.0
+    energy_traj: List[float] = None
+    time_total: float = 0.0
 
     def __post_init__(self):
         """初始化后设置剩余计算量"""
         if self.remaining_computation is None:
             self.remaining_computation = self.computation_requirement
+        if self.alloc_traj is None:
+            self.alloc_traj = []
+        if self.energy_traj is None:
+            self.energy_traj = []
 
 
 class TaskPriorityEvaluator:
@@ -86,7 +95,7 @@ class TaskPriorityEvaluator:
 class PriorityQueueServer:
     """多级优先级队列服务器（时间步长版本）"""
 
-    def __init__(self, server_id: int, total_computation_power: float = 10.0e9):
+    def __init__(self, server_id: int, total_computation_power: float = 10.0e9, energy_coeff: float = 1.0e-29):
         """
         初始化服务器
 
@@ -96,7 +105,9 @@ class PriorityQueueServer:
         """
         self.server_id = server_id
         self.total_computation_power = total_computation_power  # CPU周期/s
-        self.slot_time = 0.1  # 时隙大小 0.1s
+        self.slot_time = 0.05  # 时隙大小 0.05s
+        self.energy_coeff = energy_coeff
+        self.energy_last_slot = 0.0
 
         # 多级优先级队列
         self.priority_queues = {
@@ -112,6 +123,7 @@ class PriorityQueueServer:
         self.completed_tasks: List[ComputeTask] = []
         self.failed_tasks: List[ComputeTask] = []
         self.total_processing_slots: int = 0
+        self.queue_weights = {TaskPriority.HIGH: 1.0, TaskPriority.MEDIUM: 0.0, TaskPriority.LOW: 0.0}
 
     def add_task(self, task: ComputeTask) -> bool:
         """
@@ -178,40 +190,69 @@ class PriorityQueueServer:
 
         return all_tasks
 
+    def _compute_queue_metrics(self) -> Dict[TaskPriority, Dict[str, float]]:
+        metrics = {}
+        for p in [TaskPriority.HIGH, TaskPriority.MEDIUM, TaskPriority.LOW]:
+            q = self.priority_queues[p]
+            n = len(q)
+            near = 0
+            for e in q:
+                u = TaskPriorityEvaluator.calculate_urgency_score(e['task'], self.current_slot)
+                if u >= 0.8:
+                    near += 1
+            metrics[p] = {
+                'len': float(n),
+                'near': float(near)
+            }
+        return metrics
+
+    def _compute_queue_weights(self) -> Dict[TaskPriority, float]:
+        m = self._compute_queue_metrics()
+        total_len = sum(m[p]['len'] for p in m)
+        total_near = sum(m[p]['near'] for p in m)
+        def ratio(x, total):
+            return (x / total) if total > 0 else 0.0
+        w = {}
+        for p in [TaskPriority.HIGH, TaskPriority.MEDIUM, TaskPriority.LOW]:
+            r_len = ratio(m[p]['len'], total_len)
+            r_near = ratio(m[p]['near'], total_near)
+            base = 0.1
+            if p == TaskPriority.HIGH:
+                score = 0.6 * r_near + 0.4 * r_len
+            elif p == TaskPriority.MEDIUM:
+                score = 0.3 * r_near + 0.4 * r_len
+            else:
+                score = 0.1 * r_near + 0.2 * r_len
+            w[p] = max(base, score)
+        s = sum(w.values())
+        for p in w:
+            w[p] = w[p] / s if s > 0 else (1.0 if p == TaskPriority.HIGH else 0.0)
+        self.queue_weights = w
+        return w
+
     def _allocate_resources(self) -> Dict[str, float]:
-        """
-        为所有任务分配计算资源
-        相同优先级的任务同时处理，按计算量比例分配资源
-        """
-        cur_tasks = self._get_cur_tasks()
-
-        # 如果当前无任务
-        if not cur_tasks:
+        all_tasks = self._get_all_tasks()
+        if not all_tasks:
             return {}
-
-        # 按权重比例分配资源
+        w = self._compute_queue_weights()
         allocated_resources = {}
-        self._allocate_resources_by_computation(cur_tasks)
-        for task_entry in cur_tasks:
-            task_id = task_entry['task'].task_id
-            allocated_resource = task_entry['task'].current_comp_resource
-            allocated_resources[task_id] = allocated_resource
-
+        for p in [TaskPriority.HIGH, TaskPriority.MEDIUM, TaskPriority.LOW]:
+            q = self.priority_queues[p]
+            if not q:
+                continue
+            self._allocate_resources_by_computation(q, w[p])
+            for e in q:
+                task_id = e['task'].task_id
+                allocated_resources[task_id] = e['task'].current_comp_resource
         return allocated_resources
 
-    def _allocate_resources_by_computation(self, tasks: List[Dict[str, Any]]) -> None:
-        """
-        相同优先级任务按照计算量大小比例分配资源
-        计算量越大的任务分配越多资源
-        """
+    def _allocate_resources_by_computation(self, tasks: List[Dict[str, Any]], queue_weight: float) -> None:
         total_computation = sum(task['resource_score'] for task in tasks)
-
         if total_computation > 0:
             for task_entry in tasks:
-                # 按计算量比例分配资源
                 computation_ratio = task_entry['resource_score'] / total_computation
-                task_entry['task'].current_comp_resource = computation_ratio
-                # self.allocated_resources[task_entry['agent_id']] = computation_ratio
+                task_entry['task'].current_comp_resource = computation_ratio * queue_weight
+                task_entry['task'].alloc_traj.append(task_entry['task'].current_comp_resource)
 
     def _process_tasks(self, allocated_resources: Dict[str, float], time: float) -> List[ComputeTask]:
         """
@@ -223,7 +264,7 @@ class PriorityQueueServer:
         flag = False
         rest_time = 0.0
 
-        cur_tasks = self._get_cur_tasks()
+        cur_tasks = self._get_all_tasks()
 
         for task_entry in cur_tasks:
             task = task_entry['task']
@@ -235,6 +276,7 @@ class PriorityQueueServer:
                 # 任务超时，标记为失败
                 task.status = TaskStatus.FAILED
                 task.failure_reason = f"任务处理超时，已耗时{time_elapsed}时隙，超过最大容忍延迟{task.max_tolerance_delay}时隙"
+                task.failure_slot = self.current_slot
                 completed_tasks.append(task)
                 tasks_to_remove.append(task_entry)
                 self.failed_tasks.append(task)
@@ -244,20 +286,37 @@ class PriorityQueueServer:
             allocated_resource = allocated_resources.get(task_id, 0.0)
 
             # 当前时隙能算完的任务量
-            cur_comp = (time * self.total_computation_power / (8 * 10e6)) * allocated_resource
+            cur_comp = (time * self.total_computation_power) * allocated_resource
+            cycles_processed = min(cur_comp, task.remaining_computation)
+
+            e_inc = self.energy_coeff * cycles_processed * ((allocated_resource * self.total_computation_power) ** 2)
+
+            task.energy_total += e_inc
+            if task.energy_traj is None:
+                task.energy_traj = []
+            task.energy_traj.append(e_inc)
+            self.energy_last_slot += e_inc
             if cur_comp > task.remaining_computation:
                 flag = True
                 rest_time = time - (task.remaining_computation * 8 * 10e6 / (allocated_resource * self.total_computation_power))
-                print(f"在第{self.current_slot}时隙，有剩余时间可以算任务，rest_time = {rest_time}")
+
+                if debug:
+                    print(f"在第{self.current_slot}时隙，有剩余时间可以算任务，rest_time = {rest_time}")
 
             # 先看能不能当前时隙内算完，能算完还要再做一次其它任务的计算
             if cur_comp >= task.remaining_computation:
                 task.remaining_computation = 0
                 task.status = TaskStatus.COMPLETED
                 task.completion_slot = self.current_slot
+                task.time_total = self.current_slot - task.creation_slot + (
+                            task.remaining_computation * 8 * 10e6 / (allocated_resource * self.total_computation_power))
                 completed_tasks.append(task)
                 tasks_to_remove.append(task_entry)
                 self.completed_tasks.append(task)
+
+                if debug:
+                    print(f"在{self.current_slot}时隙，完成了agent：{task.agent_id}的任务：{task.task_id}")
+
             else:
                 # 没算完
                 task.remaining_computation -= cur_comp
@@ -273,7 +332,7 @@ class PriorityQueueServer:
             allocated_resources = self._allocate_resources()
 
             # 处理任务
-            completed_tasks = self._process_tasks(allocated_resources, rest_time)
+            completed_tasks.append(self._process_tasks(allocated_resources, rest_time))
             pass
 
         return completed_tasks
@@ -324,6 +383,7 @@ class PriorityQueueServer:
         """
         self.current_slot += 1
         self.total_processing_slots += 1
+        self.energy_last_slot = 0.0
 
         # 更新任务优先级（因为时间变化）
         self._update_task_priorities()
@@ -331,140 +391,32 @@ class PriorityQueueServer:
         # 分配资源
         allocated_resources = self._allocate_resources()
 
-        # 处理任务
+        # 处理任务，这里计算一下能耗，最后任务完成时将统计出来的任务移交core
         completed_tasks = self._process_tasks(allocated_resources, self.slot_time)
 
         return completed_tasks
 
     def get_queue_status(self) -> Dict[str, Any]:
-        """获取队列状态信息"""
-        return {
+        status = {
             'high': len(self.priority_queues[TaskPriority.HIGH]),
             'medium': len(self.priority_queues[TaskPriority.MEDIUM]),
             'low': len(self.priority_queues[TaskPriority.LOW]),
             'current_slot': self.current_slot,
             'completed_tasks': len(self.completed_tasks),
             'failed_tasks': len(self.failed_tasks),
-            'total_processing_slots': self.total_processing_slots
+            'total_processing_slots': self.total_processing_slots,
+            'energy_last_slot': self.energy_last_slot
         }
-
-    def print_detailed_status(self) -> None:
-        """打印详细状态信息"""
-        status = self.get_queue_status()
-        print(f"=== 服务器 {self.server_id} 状态 (时隙 {self.current_slot}) ===")
-        print(f"队列任务数: 高优先级{status['high']}个, 中优先级{status['medium']}个, 低优先级{status['low']}个")
-        print(
-            f"统计: 完成{status['completed_tasks']}个, 失败{status['failed_tasks']}个, 总处理时隙{status['total_processing_slots']}")
-
-        # 打印每个队列的任务详情
-        for priority in [TaskPriority.HIGH, TaskPriority.MEDIUM, TaskPriority.LOW]:
-            queue = self.priority_queues[priority]
-            if queue:
-                print(f"\n{priority.value}优先级队列:")
-                for i, task_entry in enumerate(queue):
-                    task = task_entry['task']
-                    print(f"  任务{i + 1}: {task.task_id}, 剩余计算量: {task.remaining_computation:.1f}KB, "
-                          f"状态: {task.status.value}")
-
-
-# 测试代码
-def test_priority_queue_server():
-    """测试优先级队列服务器"""
-    # 1 时隙 0.01 s
-    # 创建服务器
-    server = PriorityQueueServer("server_1", total_computation_power=10.0)  # 8 GHz
-
-    print("=== 测试多级优先级队列服务器（时间步长版本） ===\n")
-
-    # 创建测试任务
-    tasks = [
-        ComputeTask(
-            task_id="task_1", agent_id="agent_1",
-            computation_requirement=1000.0,  # 1000KB
-            max_tolerance_delay=500,  # 500个时隙, 5s
-            creation_slot=0,
-            current_comp_resource=0.0
-        ),
-        ComputeTask(
-            task_id="task_2", agent_id="agent_2",
-            computation_requirement=600.0,  # 600KB
-            max_tolerance_delay=400,  # 4s
-            creation_slot=0,
-            current_comp_resource=0.0
-        ),
-        ComputeTask(
-            task_id="task_3", agent_id="agent_3",
-            computation_requirement=400.0,  # 400KB
-            max_tolerance_delay=10,  # 0.1s
-            creation_slot=0,
-            current_comp_resource=0.0
-        )
-    ]
-
-    # 添加任务到服务器
-    print("=== 添加初始任务 ===")
-    for task in tasks:
-        success = server.add_task(task)
-        status = "成功" if success else "失败"
-        priority = TaskPriorityEvaluator.determine_priority(task, 0)
-        print(
-            f"任务 {task.task_id} 添加{status}，优先级: {priority.value}，计算量: {task.computation_requirement}KB")
-
-    # 模拟多个时隙
-    total_slots = 18  # 18 * 0.1s
-    new_tasks_added = False
-
-    for slot in range(1, total_slots + 1):
-        print(f"\n--- 时隙 {slot} 开始 ---")
-
-        # 在第3时隙添加新任务
-        if slot == 3 and not new_tasks_added:
-            new_task = ComputeTask(
-                task_id="task_5", agent_id="agent_5",
-                computation_requirement=12.0,
-                max_tolerance_delay=4,
-                creation_slot=slot,
-                current_comp_resource=0.0
-            )
-            success = server.add_task(new_task)
-            if success:
-                print(f"时隙 {slot} 添加新任务: {new_task.task_id}")
-                new_tasks_added = True
-
-        # 处理当前时隙
-        completed_tasks = server.process_time_slot()
-
-        # 输出本时隙结果
-        if completed_tasks:
-            print(f"时隙 {slot} 完成的任务:")
-            for task in completed_tasks:
-                status_info = f"状态: {task.status.value}"
-                if task.failure_reason:
-                    status_info += f", 原因: {task.failure_reason}"
-                print(f"  - 任务 {task.task_id}: {status_info}")
-        else:
-            print(f"时隙 {slot} 没有任务完成")
-
-        # 打印队列状态
-        status = server.get_queue_status()
-        print(f"队列状态: 高{status['high']}个, 中{status['medium']}个, 低{status['low']}个")
-
-        # 每2个时隙打印详细状态
-        if slot % 2 == 0:
-            server.print_detailed_status()
-
-    print(f"\n=== 测试结束 ===")
-    final_status = server.get_queue_status()
-    print(f"总处理时隙: {final_status['total_processing_slots']}")
-    print(f"成功完成任务: {final_status['completed_tasks']}个")
-    print(f"失败任务: {final_status['failed_tasks']}个")
-
-    # 显示失败任务详情
-    if server.failed_tasks:
-        print("\n失败任务详情:")
-        for task in server.failed_tasks:
-            print(f"  任务 {task.task_id}: {task.failure_reason}")
-
-
-if __name__ == "__main__":
-    test_priority_queue_server()
+        w = self.queue_weights
+        status['weights'] = {
+            'high': w.get(TaskPriority.HIGH, 0.0),
+            'medium': w.get(TaskPriority.MEDIUM, 0.0),
+            'low': w.get(TaskPriority.LOW, 0.0)
+        }
+        metrics = self._compute_queue_metrics()
+        status['near_deadline'] = {
+            'high': int(metrics[TaskPriority.HIGH]['near']),
+            'medium': int(metrics[TaskPriority.MEDIUM]['near']),
+            'low': int(metrics[TaskPriority.LOW]['near'])
+        }
+        return status

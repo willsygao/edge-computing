@@ -1,0 +1,313 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{geometry}
+\usepackage{tabularx} % 新增：用于自适应宽度的表格
+% 使用 ctex 宏包处理中文，自动适配字体，无需手动设置 SimSun
+\usepackage[heading=true]{ctex} 
+
+\geometry{a4paper, margin=1in}
+\setlength{\parindent}{2em}
+
+\title{A系统模型}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section*{A 系统模型}
+
+\subsection*{1) 系统概述}
+如图一所示，在空间域中，我们考虑一个工业物联网(IIOT)场景下的MEC网络架构，定义 $i\in U=\left\{u_1, u_2,\ldots, u_N\right\}$ 为移动机器人集合、$j\in E=\left\{e_1, e_2,\ldots, e_M\right\}$ 为边缘服务器节点集合，$N, M$ 分别为系统中用户以及边缘节点的数量。
+
+$L_j$ 边缘节点的服务覆盖半径，$j\in E$
+
+$T$ 个时隙，$t\in T=\{0,\ldots, T-1\}$，时隙的持续时间 $\tau$。
+
+\subsection*{2) 基本模型：}
+
+\subsubsection*{移动性模型}
+机器人 $i\in U$ 的移动性被描述为 $\left(l_i(t), v_i(t)\right)$，其中 $l_i(t)=\left(x_i(t), y_i(t), 0\right)$，$\varsigma_i(t)$ 表示机器人 $i$ 在 $t$ 时刻的移动方向，为机器人向边缘服务器 $j$ 移动方向的指示函数，根据当前时隙与前一个时隙的 $i$ 与 $j$ 的水平距离之差 $\Delta d_{i, j}(t)=\left|x_i(t)-x_j\right|-\left|x_i(t-1)-x_j\right|$。我们考虑两种情况，如果前一个时隙的机器人位置已知，那么 $\varsigma_i(t)$ 可以作为一个 integral indicator给出 $\varsigma_i(t)=\left\{\begin{array}{l}1,\Delta d_{i, j}(t)>0\\-1,\Delta d_{i, j}(t)<0\end{array}\right.$，如果不完全知道比如 $t=0$ 或者 $\Delta d_{i, j}(t)=0$ 那就给出一个预测 $\varsigma_i(t)=\pm P\left(\varsigma_i(t)\right)$ 是一个在$[-1,1]$之间的连续变量，其中 $P\left(\varsigma_i(t)\right)$ 是表示机器人运动的一般模型比如马尔可夫移动性模型，因此 $\varsigma_i(t)$ 归纳为
+\begin{align*}
+\varsigma_i(t)=\begin{cases} 
+1, & t>0,\Delta d_{i, j}(t)>0, \\ 
+-1, & t>0,\Delta d_{i, j}(t)<0 \\ 
+\pm P\left(\varsigma_i(t)\right), & t=0 \text{ 或 } \Delta d_{i, j}(t)=0
+\end{cases}
+\tag{0.1}
+\end{align*}
+
+本文采用高斯-马尔可夫移动性(GM)模型。在 GM 移动性模型中，机器人的移动轨迹考虑了当前位置与其未来位置的相关性，该模型与随机游走模型相比，生成的轨迹更具平滑性，解决了机器人在移动过程中方向和速度发生突变的情况。下面给出机器人 $i$ 在 $t+1$ 时刻的速度 $v_i(t+1)$ 更新公式：
+\begin{equation}
+v_i(t+1)=\mu v_i(t)+(1-\mu)\overline{v_i(t)}+\overline{\sigma_i(t)}\sqrt{1-\mu^2}\omega_i(t)
+\tag{0.2}
+\end{equation}
+其中 $\omega_i(t)$ 为服从 $N\left(0,\sigma^2\right)$ 的高斯随机过程；$\mu$、$\overline{v_i(t)}$、$\overline{\sigma_i(t)}$ 分别表示速度的记忆因子常数、$t$ 时刻的平均值和标准偏差。为简化计算和减少计算机内存占用，给出 $\overline{v_i(t)}$、$\overline{\sigma_i(t)}$ 在 $t$ 时刻的增量更新公式如下：
+\begin{equation}
+\overline{v_i(t)}=\overline{v_i(t-1)}+\frac{v_i(t)-\overline{v_i(t-1)}}{t}
+\tag{0.3}
+\end{equation}
+\begin{equation}
+\overline{\sigma_i(t)}=\sqrt{\frac{(t-1)\left(\overline{\sigma_i(t-1)}^2+\left(\overline{v_i(t)}-\overline{v_i(t-1)}\right)^2\right)}{t}+\frac{v_i(t)-\overline{v_i(t)}}{t}}
+\tag{0.4}
+\end{equation}
+依据速度更新公式，得到机器人 $i$ 的位置更新公式：
+\begin{equation}
+l_i(t+1)=l_i(t)+v_i(t)\tau
+\tag{0.5}
+\end{equation}
+
+\subsubsection*{机器人模型}
+机器人 $i\in U$ 可以被描述为 $\left(l_i(t), v_i(t), f_i^{\max}, p_i^b(t)\right)$，其中 $l_i(t)=\left(x_i(t), y_i(t), 0\right)$，$f_i^{\max}$ 表示机器人 $i$ 的计算能力。并且，机器人在系统时间轴内可以生成多个任务，每个时隙中机器人可以生成一个任务或者不生成任务，这个任务生成用二进制指标 $p_i^b(t)\in\{0,1\}$ 来表示，其中 $p_i^b(t)=1$ 表示机器人生成一个任务。
+
+\subsubsection*{任务模型}
+机器人 $i$ 在 $t$ 时刻生成的任务可以表示为 $C_i(t)=\left(c_i(t), d_i^{\text{comp}}(t), d_i^{\text{trans}}(t),\tau_i^d(t), c_i^{\text{req}}(t)\right)$，其中 $c_i(t)$ 为每比特任务所需的计算资源(CPU cycles/s)，$c_i^{\text{req}}(t)$ 为执行该任务所需的计算量，$d_i^{\text{comp}}(t)$ 为输入计算任务的大小，$d_i^{\text{trans}}(t)$ 表示当要卸载任务时通过无线信道传输的数据量，例如程序代码、元数据或参数等，$c_i(t)$ 和 $d_i^{\text{trans}}(t)$ 均服从均匀分布；$\tau_i^d(t)$ 为该任务可容忍的时延上限。$c_i^{\text{req}}(t)$ 为执行该任务所需的计算量，$c_i^{\text{req}}(t)=d_i^{\text{comp}}(t)\cdot c_i(t)$。
+
+\subsubsection*{边缘服务器模型}
+服务器 $j\in E$ 描述为 $P_j=\left(x_j, y_j, 0\right)$，并且边缘服务器的异构计算能力以不同CPU核心的计算资源量为特征，$f_j^{\text{max}}$ 表示服务器 $j$ 的最大计算资源。
+
+边缘服务器部署多级优先级队列来系统处理所有卸载的任务，多级优先级队列允许边缘服务器根据任务属性(如延迟敏感度或优先级级别)对任务进行动态排序，确保高优先级任务优先处理。这可以降低关键任务的响应时间，并优化资源分配，同时，根据剩余容忍时延划分动态优先级，能够防止低优先级任务饥饿。
+
+为每个任务 $C_i(t)$ 引入一个优先级参数 $\rho_i(t)\in\{1,2,\ldots, P\}$，其中 $\rho_i(t)$ 越小，优先级越高，$P$ 表示优先级级别数。
+
+边缘服务器 $j$ 维护 $P$ 个优先级队列，每个队列对应一个优先级级别。任务卸载到服务器后，根据 $\rho_i(t)$ 放入相应队列。服务器按照优先级从高到低处理任务。服务器 $j$ 为任务 $C_i(t)$ 分配的计算资源比例记为 $u_{ij}(t)$，任务的队列等待延迟记作 $t_{i, j}^{\text{queue}}$。
+
+边缘服务器 $j$ 每时隙会向覆盖范围内的移动机器人发送信令和心跳，确保边缘服务器与覆盖范围内的移动机器人维持连接。信令和心跳机制用于发送控制信令(如任务确认、资源预留)和心跳包(检测连接状态)。这可以提高通信可靠性。
+
+\subsubsection*{策略变量}
+
+\paragraph*{卸载策略}
+对于任务 $C_{i}(t)$，卸载策略定义为一个二进制变量 $\phi_i^a(t)\in\{0,1\}, a\in\{0, E\}$，其中 $a$ 表示卸载目的地。具体来说，任务可以在移动机器人 $i$ 上执行 $\left(\phi_i^0(t)=1\right)$ 可以在边缘服务器 $j$ 上执行 $\left(\phi_i^j(t)=1\right)$。我们假设所有的任务都是简单和打包的，不能再分割。因此，任务不能被划分成分区，在不同的设备上进行处理。因此 $t$ 时隙产生的任务 $C_i(t)$ 的卸载决策应该满足：
+\begin{equation}
+\phi_i^0(t)+\sum_{j\in E}\phi_i^j(t)=1
+\tag{0.6}
+\end{equation}
+其中，$\phi_i^0(t)=1$ 表示任务在用户移动设备上执行，$\phi_i^j(t)=1$ 表示任务被卸载到边缘节点 $j$ 上执行。
+
+\section*{B 通信模型}
+由于本文中每个边缘节点的信号覆盖范围被认为是有限的，因此机器人到边缘节点 $l_{i j}$ 的距离需要不大于边缘节点的信号覆盖范围半径 $L_j$：
+\begin{equation}
+l_{i j}(t)=\sqrt{\left(x_i(t)-x_j(t)\right)^2+\left(y_i(t)-y_j(t)\right)^2}\leq L_j
+\tag{0.7}
+\end{equation}
+任务从机器人卸载到边缘节点后，就可以在边缘节点上处理任务了。我们用 $p_{\text{trans}}$ 表示机器人的最大发射功率，设 $h_{i j}(t)$ 为 $t$ 时刻的信道功率增益：
+\begin{equation}
+h_{i j}(t)=\alpha_{i j}(t) g_{i j}(t)
+\tag{0.8}
+\end{equation}
+其中 $\alpha_{i j}(t)$ 表示服从独立同分布的瑞利随机过程，$g_{ij}(t)=\left(10^{d_{i j}(t)/ 10}\right)^{-1}$ 表示路径增益系数，$d_{i j}(t)=128+37.6\lg\left(l_{ij}(t)\right)$ 表示自由空间路径损耗。根据香农定理，移动机器人与边缘节点之间的数据传输速率可以表示为：
+\begin{equation}
+q_{i j}(t)=B_{i j}\cdot\log_2\left(1+\frac{r_{i j}(t) p_{\text{trans}} h_{ij}(t)}{\delta_j}\right)
+\tag{0.9}
+\end{equation}
+其中，$B_{i j}=\frac{B_j}{n_j(t)}$ 为边缘节点 $j$ 在 $t$ 时隙为移动机器人分配的带宽，$B_j$ 表示服务器 $j$ 的带宽，$\delta_j$ 为噪声功率。这里可以参考 Bargain论文进行扩充。
+
+\section*{C 卸载延迟和能量消耗}
+
+\subsection*{1) 卸载延迟}
+我们假设所有的任务都是简单和打包的，不能再分割。因此，任务不能被划分成分区，在不同的设备上进行处理。对于移动机器人 $i$ 在时隙 $t$ 内生成的任务 $C_i(t)$，完成任务的服务延迟取决于卸载策略。
+
+\paragraph*{本地卸载}
+当任务 $C_i(t)$ 由移动机器人 $i$ 本地处理时，时延为：
+\begin{equation}
+t_i^{i c}(t)=\frac{c_i^{r e q}(t)}{f_i(t)}
+\tag{0.10}
+\end{equation}
+其中，$f_i(t)$ 为移动机器人 $i$ 在 $t$ 时隙可用的计算能力。
+
+\paragraph*{边缘卸载}
+当边缘服务器 $j$ 处理任务时，卸载延迟主要包括传输延迟、计算延迟，即：
+\begin{equation}
+t_i^j(t)=\underbrace{t_{i, j}^{\text{trans}}(t)}_{\text{Transmission}}+\underbrace{t_{i, j}^{\text{comp}}}_{\text{Computation}}
+\tag{0.11}
+\end{equation}
+其中 $t_{i, j}^{\text{trans}}(t)=\frac{d_i^{\text{trans}}(t)}{q_{i j}(t)}$ 为移动机器人 $i$ 将任务传输给服务器 $j$ 的时延。
+
+由于队列等待时间，任务的计算延迟 $t_{i, j}^{\text{comp}}$ 应当包含队列延迟 $t_{i, j}^{\text{queue}}$ 以及实际计算延迟 $t_{i, j}^{\text{eve}}$。即：
+\begin{equation}
+t_{i, j}^{\text{comp}}=t_{i, j}^{\text{queue}}+t_{i, j}^{\text{exe}}
+\tag{0.12}
+\end{equation}
+\begin{equation}
+t_{i, j}^{\text{exe}}=\frac{c_i^{\text{req}}(t)}{u_{i j}(t) f_j^{\max}}
+\tag{0.13}
+\end{equation}
+
+\subsection*{2) 能量消耗}
+
+\paragraph*{本地卸载}
+由于在移动机器人上处理此任务所消耗的能量与 CPU频率有关，完成该任务所消耗的能量计算为：
+\begin{equation}
+e_i^k(t)=k_i\left(f_i(t)\right)^2 c_i^{\text{req}}(t)
+\tag{0.14}
+\end{equation}
+其中 $k_1\left(f_i(t)\right)^2$ 为单位计算资源的能耗，$k_1$ 为移动机器人的与设备芯片结构相关的能耗系数。
+
+\paragraph*{边缘卸载}
+当边缘服务器 $j$ 处理任务时，能量消耗表示为：
+\begin{equation}
+e_i^j(t)=\underbrace{e_{i, j}^{\text{trans}}}_{\text{Transmission}}+\underbrace{e_{i, j}^{\text{comp}}}_{\text{Computation}}
+\tag{0.15}
+\end{equation}
+其中，
+\begin{equation}
+e_{i, j}^{\text{trans}}=p_{\text{trans}} t_{i, j}^{\text{trans}}(t)
+\tag{0.16}
+\end{equation}
+任务传输完成后，边缘节点为该任务分配若干计算资源，计算能耗为：
+\begin{equation}
+e_{i, j}^{\text{comp}}=k_e\left(u_{i j}(t) f_j^{\max}\right)^2 c_i^{\text{req}}(t)
+\tag{0.17}
+\end{equation}
+其中，$k_e$ 为依赖于芯片架构的能耗系数。
+
+\section*{D Utility Model}
+
+\subsection*{1) 移动机器人效用}
+移动机器人 $i\in U$ 从卸载任务 $C_i(t)$ 中获得的效用表示为：
+\begin{equation}
+U_{i}^{a}(t)=\omega_{i}\cdot\Psi_{i}^{a}(t)-\left(1-\omega_{i}\right) D_{i}^{a}(t)
+\tag{0.18}
+\end{equation}
+式中 $\Psi_i^a(t)$ 与 $D_i^a(t)$ 分别为选择卸载策略时的任务时延归一化满意度和任务执行的归一化成本，$\omega_i$ 为满意度水平的权重系数。
+
+首先，满意度函数是一个在经济学中广泛使用的术语，它被表示为一个凸的、从零开始的对数函数。它被用来量化任务卸载策略的时延满意度水平。归一化的满意度水平可以计算为：
+\begin{equation}
+\Psi_i^a(t)=\frac{\log\left(1+\left(\tau_i^d(t)-t_i(t)\right)\right)}{\log\left(1+\tau_i^d(t)\right)}
+\tag{0.19}
+\end{equation}
+其中，$t_i(t)$ 为完成任务的总时延。
+
+其次，移动机器人的归一化成本可以根据本地卸载的能耗或远程卸载的支付费用来计算，即：
+\begin{equation}
+D_i(t)=\begin{cases}\dfrac{e_i^{lc}(t)}{e_i^{\max}}, & a=0,\\ 
+\dfrac{m_j(t)\cdot u_{i j}(t) f_j^{\max}}{m_i^{\max}}, & a=j, j\in E,\end{cases}
+\tag{0.20}
+\end{equation}
+其中，$m_j(t)$ 为服务器 $j$ 收取的计算资源费用单价，$m_i^{\max}$ 为移动机器人 $i$ 的成本预算，$e_i^{\max}$ 为移动机器人的能量约束。
+
+因此，根据式子可得 $U_i^a(t)$：
+\begin{equation}
+U_i^a(t)=\omega_i\cdot\frac{\log\left(1+\left(\tau_i^d(t)-t_i(t)\right)\right)}{\log\left(1+\tau_i^d(t)\right)}-\left(1-\omega_i\right)\left(\frac{k_i\left(f_i(t)\right)^2 c_i^{\text{req}}(t)}{e_i^{\max}}\cdot \mathbb{I}_{a=0}+\frac{m_j(t)\cdot u_{i j}(t) f_j^{\max}}{m_i^{\max}}\cdot \mathbb{I}_{a=j}\right)
+\tag{0.21}
+\end{equation}
+
+\subsection*{2) 服务器效用}
+服务器 $j$ 通过执行任务 $C_i(t)$ 获得的效用表示为任务处理收益减去能耗成本：
+\begin{equation}
+U_j^i(t)=\omega_j\cdot\Psi_j^i(t)-\left(1-\omega_j\right) D_j^i(t)
+\tag{0.22}
+\end{equation}
+其中 $\Psi_j^i(t)$ 与 $D_j^i(t)$ 分别为服务器 $j$ 的归一化收益和归一化成本，$\omega_j$ 为权重系数。
+\begin{equation}
+\Psi_j^i(t)=\frac{m_j(t)\cdot u_{ij}(t) f_j^{\max}}{m_j^{\max}\cdot f_j^{\max}}
+\tag{0.23}
+\end{equation}
+\begin{equation}
+D_j^i(t)=\frac{e_i^{j}(t)}{e_j^{\max}}
+\tag{0.24}
+\end{equation}
+$m_{j}^{\max}$ 为服务器 $j$ 的计算资源最大单价，$e_{j}^{\max}$ 为边缘服务器的能量约束。
+
+因此，根据式子可得 $U_j^i(t)$：
+\begin{equation}
+U_j^i(t)=\omega_j\cdot\frac{m_j(t)\cdot u_{i j}(t) f_j^{\max}}{m_j^{\max}\cdot f_j^{\max}}-(1-\omega_j)\frac{p_{\text{trans}} t_{i, j}^{\text{trans}}(t)+k_e\left(u_{i j}(t) f_j^{\max}\right)^2 c_i^{\text{req}}(t)}{e_j^{\max}}
+\tag{0.25}
+\end{equation}
+
+\subsection*{3) 总目标(Overall Goals)}
+本工作采用总体目标来量化服务器资源分配与移动机器人卸载策略的系统性能。因此，$t$ 时刻的总体系统目标给出如下：
+\begin{equation}
+O G(t)=\sum_{i\in U}\sum_{a\in\{0, E\}}\phi_i^a(t)\cdot p_i^b(t)\cdot\left(U_i^a(t)+U_j^i(t)\right)
+\tag{0.26}
+\end{equation}
+其中包含了本地卸载和边缘卸载策略，如果移动机器人 $i$ 在 $t$ 时刻本地卸载任务，$a=0$，即服务器 $j$ 提供服务的效用为 0，即 $U_j^i(t)=0$。
+
+% 修正：使用 tabularx 让表格宽度自适应，并用数学模式包裹符号
+\begin{table}[ht]
+\centering
+\caption{符号释义表（第一部分）}
+\begin{tabularx}{\textwidth}{|c|X|c|X|}
+\hline
+符号 & \centering 释义 & 符号 & \centering 释义 \tabularnewline
+\hline
+$U$ & 用户集合 & $E$ & 边缘节点集合 \\
+\hline
+$L_j$ & 边缘节点的服务覆盖半径 & $T$ & 时隙数量 \\
+\hline
+$T$ & 时隙的持续时间 & $l_2(t)$ & 机器人$i$在$t$时刻位置 \\
+\hline
+$v_i(t)$ & 机器人$i$在$t$时刻速度 & $\Delta d_{ij}(t)$ & 当前与前一个时隙的$i$与$j$的水平距离之差 \\
+\hline
+$S_i(t)$ & 机器人$i$在$t$时刻的移动方向 & $\mu$ & 速度的记忆因子常数 \\
+\hline
+$V_2(t)$ & $t$时刻的速度平均值 & $0(t)$ & $t$时刻的速度标准偏差 \\
+\hline
+$f_i^{\max}$ & 机器人$i$的计算能力 & $p(t)$ & 任务生成二进制指标 \\
+\hline
+$C(t)$ & 任务状态表示 & $c(t)$ & 每比特任务所需的计算资源(CPU cycles/s) \\
+\hline
+$d^{\text{comp}}(t)$ & 输入计算任务的大小 & $d^{\text{trans}}(t)$ & 卸载任务时通过无线信道传输的数据量 \\
+\hline
+$T_d(t)$ & 任务可容忍的时延上限 & $C^{\text{req}}(t)$ & 执行该任务所需的计算量 \\
+\hline
+$P_j$ & 服务器$j$的位置表示 & $f$ & 服务器$j$的最大计算资源 \\
+\hline
+$a(t)$ & 卸载策略变量 &  &  \\
+\hline
+$l_{ij}$ & $i$到$j$的距离 & $P_{\text{trans}}$ & 机器人的发射功率 \\
+\hline
+$h_{jj}(t)$ & $t$时刻的信道功率增益 & $\alpha_{ij}(t)$ & 服从独立同分布的瑞利随机过程 \\
+\hline
+$g_{ij}(t)$ & 路径增益系数 & $d_g(t)$ & 自由空间路径损耗 \\
+\hline
+$q_{ij}(t)$ & 移动机器人与边缘节点之间的数据传输速率 & $B$ & 边缘节点$j$在$t$时隙为移动机器人设置的带宽 \\
+\hline
+$B_j$ & 服务器$j$的带宽 & $\delta$ & 噪声功率 \\
+\hline
+$t(t)$ & 本地处理时延 & $f_i(t)$ & 移动机器人$i$在$t$时隙可用的计算能力 \\
+\hline
+$t_j(t)$ & 边缘服务器$j$处理任务时延 & $t(t)$ & 移动机器人$i$将任务传输给服务器$j$的时延 \\
+\hline
+$t^{\text{comp}}_{i,j}$ & 边缘服务器$j$处理任务计算延迟 & $e(t)$ & 本地处理能耗 \\
+\hline
+$k$ & 移动机器人能耗系数 & $e_j(t)$ & 边缘服务器$j$处理任务能耗 \\
+\hline
+trans & 传输能耗 & ecomp & 边缘服务器$j$计算任务能耗 \\
+\hline
+$U_a(t)$ & 移动机器人效用表示 & $w$ & 移动机器人效用权重系数 \\
+\hline
+$Y_2(t)$ & 任务时延归一化满意度 & $D(t)$ & 任务执行的归一化成本 \\
+\hline
+$t_2(t)$ & 完成任务的总时延 & $P_i(t)$ & 优先级参数 \\
+\hline
+$P$ & 优先级级别数 & $U(t)$ & 服务器$j$为任务$C(t)$分配的计算资源比例 \\
+\hline
+$t$ & 队列等待延迟 & $t$ & $j$处理任务的计算延迟 \\
+\hline
+\end{tabularx}
+\end{table}
+
+\begin{table}[ht]
+\centering
+\caption{符号释义表（第二部分）}
+\begin{tabularx}{\textwidth}{|c|X|c|X|}
+\hline
+符号 & \centering 释义 & 符号 & \centering 释义 \tabularnewline
+\hline
+$k_e$ & 依赖于芯片架构的能耗系数。 & $m_j(t)$ & 服务器$j$收取的计算资源费用单价 \\
+\hline
+$m_{\max}$ & 移动机器人$i$的成本预算 & $U_j(t)$ & 服务器$J$通过执行任务$C(t)$获得的效用 \\
+\hline
+$Y_j(t) w$ & 服务器$j$的归一化收益服务器效用权重系数 & $D_j(t) m_{\max}$ & 服务器$j$的归一化成本服务器$j$的计算资源最大单价 \\
+\hline
+\end{tabularx}
+\end{table}
+
+\end{document}

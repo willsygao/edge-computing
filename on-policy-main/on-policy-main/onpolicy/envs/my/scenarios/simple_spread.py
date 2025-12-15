@@ -1,5 +1,6 @@
 import numpy as np
 from onpolicy.envs.my.core import MecWorld, MecAgent, MecServer
+from onpolicy.envs.my.visualize import QueueVisualizer
 from onpolicy.envs.my.scenario import BaseScenario
 
 
@@ -45,6 +46,9 @@ class Scenario(BaseScenario):
             mec_server.size = 0.25
         # make initial conditions
         self.reset_world(world)
+        world.visualizer = QueueVisualizer(use_wandb=args.use_wandb)
+        if hasattr(world.servers[0], 'priority_server'):
+            world.slot_time = float(world.servers[0].priority_server.slot_time)
         assert len(world.servers_list) == num_servers
         return world
 
@@ -105,8 +109,12 @@ class Scenario(BaseScenario):
 
     @staticmethod
     def reward(agent: MecAgent, world: MecWorld):
-        r1 = agent.state.energy_cur
-        return -r1
+        n = len(world.agents_list) if hasattr(world, 'agents_list') else 1
+        og = float(world._cache_og_total) if hasattr(world, '_cache_og_total') and world._cache_og_total is not None else 0.0
+        base = og / float(n)
+        ended_ids = getattr(world, '_ended_agents_ids_step', []) if hasattr(world, '_ended_agents_ids_step') else []
+        fail_pen = float(getattr(world, 'fail_penalty', 1.0)) if agent.id in ended_ids and getattr(agent.task, '_state', None) == 3 else 0.0
+        return base - fail_pen
         # r2 = agent.mu2 * (agent.state.task_delay_tol - agent.state.time_cur)
         # if (agent.state.task_delay_tol - agent.state.time_cur) >= 0:
         #     return r2 - r1
@@ -115,28 +123,25 @@ class Scenario(BaseScenario):
 
     @staticmethod
     def observation(agent: MecAgent, world: MecWorld):
-        # get positions of all entities in this agent's reference frame
-        agents_task_input = []
-        agents_task_execution = []
-        agents_task_tau = []
-        agents_task_q_left = []
-        agents_power_gain = []
-
-        agents_task_input.append(agent.state.task_i_s)
-        agents_task_execution.append(agent.state.task_e_s)
-        agents_task_tau.append(agent.state.task_delay_tol)
-        agents_task_q_left.append(agent.state.task_q_left)
-        agents_power_gain = agents_power_gain + list(agent.state.power_gain.values())
-        # for other in world.agents:
-        #     if other is agent: continue
-        #     agents_task_input.append(other.state.task_i_s)
-        #     agents_task_execution.append(other.state.task_e_s)
-        #     agents_task_tau.append(other.state.task_delay_tol)
-        #     agents_task_q_left.append(other.state.task_q_left)
-        #     agents_power_gain = agents_power_gain + list(other.state.power_gain.values())
-
-        return np.concatenate([agents_task_input + agents_task_execution + agents_task_tau + agents_task_q_left
-                               + agents_power_gain])
+        i_mb = float(agent.state.task_i_s if agent.state.task_i_s is not None else 0.0) / 1e6
+        i_mb = float(np.clip(i_mb, 0.0, 200.0))
+        e_gcy = float(agent.state.task_e_s if agent.state.task_e_s is not None else 0.0) / 1e9
+        e_gcy = float(np.clip(e_gcy, 0.0, 100.0))
+        tau_s = float(agent.state.task_delay_tol if agent.state.task_delay_tol is not None else 0.0)
+        tau_norm = float(np.clip(tau_s / 2.0, 0.0, 1.0))
+        q_left = float(agent.state.task_q_left if agent.state.task_q_left is not None else 0.0)
+        q_left = float(np.clip(q_left, 0.0, 1e6))
+        pg_list = []
+        if agent.state.power_gain is not None:
+            for pg in agent.state.power_gain.values():
+                pg_db = 10.0 * np.log10(pg + 1e-12)
+                pg_norm = (pg_db + 120.0) / 100.0
+                pg_list.append(float(np.clip(pg_norm, 0.0, 1.0)))
+        else:
+            pg_list = [0.0] * len(world.servers_list)
+        obs = np.array([i_mb, e_gcy, tau_norm, q_left] + pg_list, dtype=np.float32)
+        obs = np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=0.0)
+        return obs
 
     @staticmethod
     def done(world: MecWorld):

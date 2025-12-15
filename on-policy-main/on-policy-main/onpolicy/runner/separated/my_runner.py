@@ -35,6 +35,25 @@ class MECRunner(Runner):
                 # Obser reward and next obs
                 obs, shared_obs, rewards, dones, infos, available_actions = self.envs.step(actions_env)
 
+                if self.use_wandb:
+                    infos_np = np.array(infos, dtype=np.float32)
+                    og_agents = infos_np[:, :, 2].mean(axis=0)
+                    energy_agents = infos_np[:, :, 0].mean(axis=0)
+                    time_agents = infos_np[:, :, 1].mean(axis=0)
+                    action_agents = infos_np[:, :, 3].mean(axis=0)
+                    offload_ids = infos_np[:, :, 4].mean(axis=0)
+                    trans_rates = infos_np[:, :, 5].mean(axis=0)
+                    og_global = float(og_agents.sum())
+                    log_dict = {"objective/OG_global": og_global}
+                    for aid in range(self.num_agents):
+                        log_dict[f"objective/OG_agent_{aid}"] = float(og_agents[aid])
+                        log_dict[f"cost/energy_agent_{aid}"] = float(energy_agents[aid])
+                        log_dict[f"cost/time_agent_{aid}"] = float(time_agents[aid])
+                        log_dict[f"action/agent_{aid}"] = float(action_agents[aid])
+                        log_dict[f"action/offload_s_id_{aid}"] = float(offload_ids[aid])
+                        log_dict[f"net/trans_rate_agent_{aid}"] = float(trans_rates[aid])
+                    wandb.log(log_dict, step=episode * self.episode_length + step)
+
                 data = obs, shared_obs, rewards, dones, infos, available_actions, values, actions, action_log_probs, rnn_states, rnn_states_critic
                 
                 # insert data into buffer

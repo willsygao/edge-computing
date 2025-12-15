@@ -93,18 +93,34 @@ class MultiAgentMecEnv(gym.Env):
         self.world.step()
 
         for i, agent in enumerate(self.agents):
-            if sum(action_n[i][1:self.world.num_servers + 1]) > 0:
-                assert sum(action_n[i][1:self.world.num_servers + 1]) == 1
-                t_cost, e_cost = self.world.edge_cost(agent)
+            if sum(agent.action.offload) > 0:
+                offload_s_id = int(np.argmax(agent.action.offload) + 1)
+                self.world.edge_cost(agent)
+                action_type = 1
+                trans_rate = float(agent.state.trans_rate) if agent.state.trans_rate is not None else 0.0
+                p_weight = float(agent.state.trans_pow)
             else:
+                offload_s_id = 0
                 t_cost, e_cost = self.world.local_cost(agent)
+                action_type = 0
+                trans_rate = 0.0
+                p_weight = 1.0
             obs_n.append(self._get_obs(agent))
-            reward_n.append([self._get_reward(agent)])
             done_n.append(self._get_done(agent))
-            # info = {'individual_reward': self._get_reward(agent)}
-            env_info = self._get_info(agent)
-
+            trade_lambda = float(self.world.trade_lambda) if hasattr(self.world, 'trade_lambda') and self.world.trade_lambda is not None else 0.0
+            objective_cur = float(p_weight) * (float(agent.state.energy_cur) + trade_lambda * float(agent.state.time_cur))
+            env_info = [float(agent.state.epi_energy), float(agent.state.time_cur), float(objective_cur), float(action_type), float(offload_s_id), float(trans_rate)]
             info_n.append(env_info)
+
+        if hasattr(self.world, 'compute_utilities_cache'):
+            self.world.compute_utilities_cache()
+
+        for agent in self.agents:
+            reward_n.append([self._get_reward(agent)])
+
+        # 计算效用并更新可视化（使用最新的能耗/时延与队列状态）
+        if hasattr(self.world, 'compute_utilities_and_update_visualizer'):
+            self.world.compute_utilities_and_update_visualizer()
 
         reward = np.sum(reward_n)
 
@@ -149,7 +165,9 @@ class MultiAgentMecEnv(gym.Env):
         # 用于获取特定智能体的观测值
         if self.observation_callback is None:
             return np.zeros(0)
-        return self.observation_callback(agent, self.world)
+        obs = self.observation_callback(agent, self.world)
+        obs = np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=0.0)
+        return obs
 
     # get dones for a particular agent
     def _get_done(self, agent):
