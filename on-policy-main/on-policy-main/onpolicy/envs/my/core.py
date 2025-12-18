@@ -7,6 +7,8 @@ except ImportError:
     import task_queue
     from visualize import QueueVisualizer
 
+debug = True
+
 class Task:
     def __init__(self, u_name, tsId):
         self._mRIndex = u_name
@@ -16,6 +18,8 @@ class Task:
         self.exe_data = float(np.random.uniform(1.6e9, 4e9))  # 单位：cycles
         self.delay_tol = float(np.random.uniform(0.1, 5.0))  # 单位：s
         self.type = np.random.randint(0, 2)
+        self.cost_total = 0.0
+        self.offloading_target = None  # 标识任务卸载目标：'local' 或 'edge'
 
 class EntityState(object):
     p_pos: list
@@ -29,6 +33,7 @@ class AgentState(EntityState):
 
     def __init__(self):
         super(AgentState, self).__init__()
+        self.energy_const = 25  # 能量约束，单位：
         self.task_i_s = None  # input size
         self.task_e_s = None  # execution size
         self.task_delay_tol = None  # task deadline constraint
@@ -51,6 +56,7 @@ class AgentState(EntityState):
 
         self.epi_energy = 0
         self.finish = False
+        self.local_remain_time = 0.0
 
 class ServerState(EntityState):
     def __init__(self):
@@ -97,6 +103,8 @@ class MecServer(Entity):
         self.n_propeller = 4  # number of propellers
         self.air_rho = 1.29  # air density
         self.wing_len = 0.20  # wing area in m
+        self.energy_const = 25  # 能量约束
+        self.weight = 0.5  # utility权重
         self.movable = False
         self.agent_dict = {}
         self.state = ServerState()
@@ -139,9 +147,12 @@ class MecAgent(Entity):
         self.server_list = []
         self.avail_action = []
         self.task = Task(self.name, 0)
-        self.pending_offload_task_id = None
+        self.pending_offload_task_id = None  # "{agent.id}-{agent.task._timeIndex}"
         self.pending_server_id = None
         self.cur_server_id = None
+        self.utility_history = []
+        self.last_utility = None
+        self.agent_cost_max = 200
 
 class MecWorld(object):
     num_users: int
@@ -203,7 +214,7 @@ class MecWorld(object):
 
         self.debug = True  # 调试信息
         self.visualizer = QueueVisualizer()
-        self.sat_weight = 0.5
+        self.sat_weight = 0.8  # 机器人效用的w参数
         self.server_util_a = 1.0
         self.server_util_b = 1.0
         self.server_util_c = 0.1
@@ -213,6 +224,8 @@ class MecWorld(object):
         self._cache_server_utils = None
         self._cache_agent_utils = None
         self.fail_penalty = 1.0
+
+        self.server_cost_max = 50.0  # 服务器最大资源单价
 
     # return all entities in the world
     # 获取包含所有智能体对象的列表
@@ -260,6 +273,7 @@ class MecWorld(object):
 
                         agent.state.energy_cur += t.energy_total
                         agent.state.epi_energy = agent.state.energy_cur
+                        agent.task.cost_total = t.cost_total
                         self._ended_agents_ids_step.append(agent.id)
                         done = True
                         break
@@ -273,9 +287,34 @@ class MecWorld(object):
                             self._ended_agents_ids_step.append(agent.id)
                             done = True
                             break
-                if done:
-                    agent.pending_offload_task_id = None
-                    agent.pending_server_id = None
+                # if done:
+                #     agent.pending_offload_task_id = None
+                #     agent.pending_server_id = None
+
+            # 处理本地执行的任务
+            elif agent.task._state == 1 and agent.pending_offload_task_id is None:
+                agent.state.local_remain_time -= self.slot_time
+                if agent.state.local_remain_time <= 0:
+                    # 任务完成，检查是否超时
+                    if agent.state.time_cur > agent.task.delay_tol:
+                        agent.task._state = 3
+                    else:
+                        agent.task._state = 2
+                    self._ended_agents_ids_step.append(agent.id)
+                    agent.state.local_remain_time = 0.0
+
+        for agent in self.agents:
+            u = self.agent_utility(agent)
+            entry = {
+                'slot': self.time,
+                'utility': u,
+                'completed': bool(agent.task and agent.task._state == 2),
+                'failed': bool(agent.task and agent.task._state == 3),
+                'mode': ('edge' if sum(agent.action.offload) > 0 else 'local'),
+                'server_id': (int(np.argmax(agent.action.offload) + 1) if sum(agent.action.offload) > 0 else None)
+            }
+            agent.utility_history.append(entry)
+            agent.last_utility = u
         
     # update position state for a particular agent
     def update_agent_position_state(self, agent: MecAgent):
@@ -330,6 +369,8 @@ class MecWorld(object):
     def update_agent_task_state(self, agent: MecAgent):
         if agent.task is None or agent.task._state in (2, 3):
             agent.task = Task(agent.name, self.time)
+            agent.pending_offload_task_id = None
+            agent.pending_server_id = None
         t = agent.task
         agent.state.task_i_s = t.input_data
         agent.state.task_e_s = t.exe_data
@@ -338,23 +379,31 @@ class MecWorld(object):
         agent.state.task_q_left = 0
 
     def local_cost(self, agent: MecAgent):
+        # 如果已经在本地执行（状态为1且没有 pending offload），则直接返回0，不重复计算
+        if agent.task._state == 1:
+            return 0.0, 0.0
+
+        agent.task.offloading_target = 'local'
+
         agent.state.offload_pass_t = 0
         task = agent.task
         t_cost = task.exe_data / (agent.action.v_resource_alloc * agent.freq)
         e_cost = agent.state.kl * task.exe_data * pow((agent.action.v_resource_alloc * agent.freq), 2)
         agent.state.time_cur = t_cost
         agent.state.energy_cur = e_cost
-        agent.state.epi_energy += e_cost
-        agent.task._state = 2
-
-        if self.debug:
-            print(f"卸载到本地计算：energy_cur为{agent.state.energy_cur},epi_energy为{agent.state.epi_energy},epi_latency为{agent.state.time_cur}")
+        agent.state.epi_energy = e_cost
+        
+        # 启动本地执行：设置为状态1，记录剩余时间
+        agent.task._state = 1
+        agent.state.local_remain_time = t_cost
+        # 不立即完成，交由 step 中的循环处理倒计时
 
         return t_cost, e_cost
 
     def edge_cost(self, agent: MecAgent):
 
         task = agent.task
+        task.offloading_target = 'edge'
         offload_s_id = agent.cur_server_id  # 基站id：1234, 卸载下标为0123
 
         agent.state.offload_prev_t = agent.state.offload_pass_t if agent.state.offload_pass_t is not None else 0
@@ -418,24 +467,29 @@ class MecWorld(object):
         return 0.0
 
     def agent_utility(self, agent: MecAgent):
-        if agent.task is None or agent.task._state not in (2, 3):
+        # 如果任务未完成，则为0
+        if agent.task is None or agent.task._state != 2:
             return 0.0
+        # 时延容忍度
         tau = float(agent.state.task_delay_tol) if agent.state.task_delay_tol is not None else 0.0
+        # 消耗的时间
         t_cur = float(agent.state.time_cur) if agent.state.time_cur is not None else 0.0
+        # 计算满意度
         if tau > 0:
-            s_norm = max(0.0, min(1.0, 1.0 - (t_cur / tau)))
+            if debug:
+                if agent.task.offloading_target == 'edge':
+                    print(f"agent{agent.id}:tau={tau},t_cur={t_cur},在边缘计算")
+                else:
+                    print(f"agent{agent.id}:tau={tau},t_cur={t_cur},在本地计算")
+            s_norm = log(1 + tau - t_cur) / log(1 + tau)
         else:
             s_norm = 0.0
-        if sum(agent.action.offload) > 0:
-            offload_s_id = int(np.argmax(agent.action.offload) + 1)
-            cur_task_id = f"{agent.id}-{agent.task._timeIndex}"
-            server = self.servers[offload_s_id - 1]
-            c_norm = self._get_allocated_resource(server, cur_task_id)
-        else:
-            f_ue = float(agent.freq)
-            v_alloc = float(agent.action.v_resource_alloc)
-            c_norm = (v_alloc * f_ue) / float(self.max_local_frequency) if self.max_local_frequency > 0 else 0.0
-            c_norm = max(0.0, min(1.0, c_norm))
+        # 计算成本
+        if agent.task.offloading_target == 'edge':  # 边缘
+            c_norm = agent.task.cost_total / agent.agent_cost_max
+        else:  # 本地
+            c_norm = agent.state.energy_cur / agent.state.energy_const
+        # 返回utility
         theta = float(self.sat_weight)
         return theta * s_norm - (1.0 - theta) * c_norm
 
@@ -443,44 +497,33 @@ class MecWorld(object):
         nd = status.get('near_deadline', {})
         return float(nd.get('high', 0) + nd.get('medium', 0) + nd.get('low', 0))
 
-    def server_utility(self, server: MecServer):
-        cur = server.priority_server.get_queue_status()
-        sid = server.id
-        last = self._last_server_status.get(sid, None)
-        dC = float(cur.get('completed_tasks', 0)) - (float(last.get('completed_tasks', 0)) if last else 0.0)
-        dF = float(cur.get('failed_tasks', 0)) - (float(last.get('failed_tasks', 0)) if last else 0.0)
-        Q = float(cur.get('high', 0) + cur.get('medium', 0) + cur.get('low', 0))
-        N = self._server_near_deadline_total(server, cur)
-        a = float(self.server_util_a)
-        b = float(self.server_util_b)
-        c = float(self.server_util_c)
-        d = float(self.server_util_d)
-        util = a * dC - b * dF - c * Q - d * N
-        self._last_server_status[sid] = cur
+    def server_utility(self, agent: MecAgent):
+        s_norm = agent.task.cost_total / (self.server_cost_max * self.servers[agent.pending_server_id - 1].freq)
+        c_norm = agent.state.energy_cur / self.servers[agent.pending_server_id - 1].energy_const
+
+        util = self.servers[agent.pending_server_id - 1].weight * s_norm - (1 - self.servers[agent.pending_server_id - 1].weight) * c_norm
         return util
 
     def total_objective(self):
         og = 0.0
-        server_utils = {s.id: self.server_utility(s) for s in self.servers}
+        server_utils = {}
         for agent in self.agents:
             if not hasattr(self, '_ended_agents_ids_step') or agent.id not in getattr(self, '_ended_agents_ids_step'):
                 continue
-            if sum(agent.action.offload) > 0:
-                offload_s_id = int(np.argmax(agent.action.offload) + 1)
-                p_weight = float(agent.state.trans_pow)
+            if agent.task.offloading_target == 'edge':
                 u_agent = self.agent_utility(agent)
-                u_server = float(server_utils.get(offload_s_id, 0.0))
-                og += 1.0 * p_weight * (u_agent + u_server)
+                u_server = self.server_utility(agent)
+                server_utils[agent.pending_server_id] = u_server
+                og += 1.0 * (u_agent + u_server)
             else:
-                p_weight = 1.0
                 u_agent = self.agent_utility(agent)
                 # 本地不计服务器效用
-                og += 1.0 * p_weight * (u_agent + 0.0)
+                og += 1.0 * (u_agent + 0.0)
         return og, server_utils
 
     def compute_utilities_and_update_visualizer(self):
         if self._cache_agent_utils is None or self._cache_server_utils is None or self._cache_og_total is None:
-            self._cache_agent_utils = [self.agent_utility(a) for a in self.agents]
+            self._cache_agent_utils = [float(a.last_utility) if a.last_utility is not None else 0.0 for a in self.agents]
             self._cache_og_total, self._cache_server_utils = self.total_objective()
         metrics = {
             'agent_utility_mean': float(np.mean(self._cache_agent_utils)) if len(self._cache_agent_utils) > 0 else 0.0,
@@ -493,5 +536,5 @@ class MecWorld(object):
 
     def compute_utilities_cache(self):
         ended_agents = [a for a in self.agents if hasattr(self, '_ended_agents_ids_step') and a.id in getattr(self, '_ended_agents_ids_step')]
-        self._cache_agent_utils = [self.agent_utility(a) for a in ended_agents]
+        self._cache_agent_utils = [float(a.last_utility) if a.last_utility is not None else 0.0 for a in ended_agents]
         self._cache_og_total, self._cache_server_utils = self.total_objective()

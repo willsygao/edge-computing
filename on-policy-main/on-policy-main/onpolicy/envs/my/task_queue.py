@@ -29,7 +29,7 @@ class ComputeTask:
     creation_slot: int  # 创建时隙
     current_comp_resource: float  # 当前时隙分配的计算资源量
     status: TaskStatus = TaskStatus.PENDING
-    remaining_computation: Optional[float] = None  # 剩余计算量
+    remaining_computation: Optional[float] = None  # 剩余计算量，单位：
     completion_slot: Optional[int] = None
     failure_reason: Optional[str] = None
     failure_slot: Optional[int] = None
@@ -37,6 +37,7 @@ class ComputeTask:
     energy_total: float = 0.0
     energy_traj: List[float] = None
     time_total: float = 0.0
+    cost_total: float = 0.0  # 向服务器支付的钱统计
 
     def __post_init__(self):
         """初始化后设置剩余计算量"""
@@ -108,6 +109,7 @@ class PriorityQueueServer:
         self.slot_time = 0.05  # 时隙大小 0.05s
         self.energy_coeff = energy_coeff
         self.energy_last_slot = 0.0
+        self.cost = 20.0  # 服务器单价
 
         # 多级优先级队列
         self.priority_queues = {
@@ -285,10 +287,12 @@ class PriorityQueueServer:
             # 获取分配的资源
             allocated_resource = allocated_resources.get(task_id, 0.0)
 
+            task.cost_total += self.cost * self.total_computation_power * allocated_resource
+
             # 当前时隙能算完的任务量
             cur_comp = (time * self.total_computation_power) * allocated_resource
             cycles_processed = min(cur_comp, task.remaining_computation)
-
+            # 当前时隙该任务产生的服务器能耗
             e_inc = self.energy_coeff * cycles_processed * ((allocated_resource * self.total_computation_power) ** 2)
 
             task.energy_total += e_inc
@@ -298,7 +302,7 @@ class PriorityQueueServer:
             self.energy_last_slot += e_inc
             if cur_comp > task.remaining_computation:
                 flag = True
-                rest_time = time - (task.remaining_computation * 8 * 10e6 / (allocated_resource * self.total_computation_power))
+                rest_time = time - (task.remaining_computation / (allocated_resource * self.total_computation_power))
 
                 if debug:
                     print(f"在第{self.current_slot}时隙，有剩余时间可以算任务，rest_time = {rest_time}")
@@ -308,18 +312,20 @@ class PriorityQueueServer:
                 task.remaining_computation = 0
                 task.status = TaskStatus.COMPLETED
                 task.completion_slot = self.current_slot
-                task.time_total = self.current_slot - task.creation_slot + (
+                task.time_total = (self.current_slot - task.creation_slot) * self.slot_time + (
                             task.remaining_computation * 8 * 10e6 / (allocated_resource * self.total_computation_power))
                 completed_tasks.append(task)
                 tasks_to_remove.append(task_entry)
                 self.completed_tasks.append(task)
 
                 if debug:
-                    print(f"在{self.current_slot}时隙，完成了agent：{task.agent_id}的任务：{task.task_id}")
+                    print(f"边缘：在{self.current_slot}时隙，完成了agent：{task.agent_id}的任务：{task.task_id}，耗时{task.time_total}s")
 
             else:
                 # 没算完
                 task.remaining_computation -= cur_comp
+                if debug:
+                    print(f"在第{self.current_slot}时隙，计算了agent：{task.agent_id}的任务：{task.task_id}，{cur_comp}，剩余{task.remaining_computation}")
 
         # 移除已完成或失败的任务,从优先级队列中移除
         self._remove_tasks_from_queues(tasks_to_remove)

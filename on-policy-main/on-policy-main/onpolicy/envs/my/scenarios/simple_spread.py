@@ -57,6 +57,9 @@ class Scenario(BaseScenario):
         重设基站、智能体位置、通信状态等
         """
         world.time = 0
+        for agent in world.agents:
+            agent.utility_history = []
+            agent.last_utility = None
         # set servers position states
         world.servers_list[0].state.p_pos = [250, 250, 15]
         world.servers_list[1].state.p_pos = [750, 250, 15]
@@ -109,17 +112,11 @@ class Scenario(BaseScenario):
 
     @staticmethod
     def reward(agent: MecAgent, world: MecWorld):
-        n = len(world.agents_list) if hasattr(world, 'agents_list') else 1
+        # n = len(world.agents_list) if hasattr(world, 'agents_list') else 1
         og = float(world._cache_og_total) if hasattr(world, '_cache_og_total') and world._cache_og_total is not None else 0.0
-        base = og / float(n)
         ended_ids = getattr(world, '_ended_agents_ids_step', []) if hasattr(world, '_ended_agents_ids_step') else []
         fail_pen = float(getattr(world, 'fail_penalty', 1.0)) if agent.id in ended_ids and getattr(agent.task, '_state', None) == 3 else 0.0
-        return base - fail_pen
-        # r2 = agent.mu2 * (agent.state.task_delay_tol - agent.state.time_cur)
-        # if (agent.state.task_delay_tol - agent.state.time_cur) >= 0:
-        #     return r2 - r1
-        # else:
-        #     return -agent.mu1
+        return og - fail_pen
 
     @staticmethod
     def observation(agent: MecAgent, world: MecWorld):
