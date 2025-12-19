@@ -2,7 +2,7 @@ from enum import Enum
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
-debug = True
+debug = False
 
 class TaskPriority(Enum):
     """任务优先级枚举"""
@@ -287,7 +287,7 @@ class PriorityQueueServer:
             # 获取分配的资源
             allocated_resource = allocated_resources.get(task_id, 0.0)
 
-            task.cost_total += self.cost * self.total_computation_power * allocated_resource
+            task.cost_total += self.cost * self.total_computation_power * allocated_resource * 1e-9
 
             # 当前时隙能算完的任务量
             cur_comp = (time * self.total_computation_power) * allocated_resource
@@ -312,6 +312,7 @@ class PriorityQueueServer:
                 task.remaining_computation = 0
                 task.status = TaskStatus.COMPLETED
                 task.completion_slot = self.current_slot
+                task.cost_total /= (self.current_slot - task.creation_slot)
                 task.time_total = (self.current_slot - task.creation_slot) * self.slot_time + (
                             task.remaining_computation * 8 * 10e6 / (allocated_resource * self.total_computation_power))
                 completed_tasks.append(task)
@@ -319,7 +320,7 @@ class PriorityQueueServer:
                 self.completed_tasks.append(task)
 
                 if debug:
-                    print(f"边缘：在{self.current_slot}时隙，完成了agent：{task.agent_id}的任务：{task.task_id}，耗时{task.time_total}s")
+                    print(f"边缘：在{self.current_slot}时隙，完成了agent：{task.agent_id}的任务：{task.task_id}，耗时{task.time_total}s，支付给服务器{task.cost_total}")
 
             else:
                 # 没算完

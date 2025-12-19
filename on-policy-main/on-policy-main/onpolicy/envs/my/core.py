@@ -7,7 +7,7 @@ except ImportError:
     import task_queue
     from visualize import QueueVisualizer
 
-debug = True
+debug = False
 
 class Task:
     def __init__(self, u_name, tsId):
@@ -16,7 +16,7 @@ class Task:
         self._state = 0  # 0 ：初始/新任务, 1 ：已提交到边缘，执行中, 2 ：完成本地计算, 3 ：任务失败
         self.input_data = int(np.random.randint(400, 1000))  # 单位：KB
         self.exe_data = float(np.random.uniform(1.6e9, 4e9))  # 单位：cycles
-        self.delay_tol = float(np.random.uniform(0.1, 5.0))  # 单位：s
+        self.delay_tol = float(np.random.uniform(0.3, 5.0))  # 单位：s  0.2s以下边缘都算不完
         self.type = np.random.randint(0, 2)
         self.cost_total = 0.0
         self.offloading_target = None  # 标识任务卸载目标：'local' 或 'edge'
@@ -152,7 +152,7 @@ class MecAgent(Entity):
         self.cur_server_id = None
         self.utility_history = []
         self.last_utility = None
-        self.agent_cost_max = 200
+        self.agent_cost_max = 2000
 
 class MecWorld(object):
     num_users: int
