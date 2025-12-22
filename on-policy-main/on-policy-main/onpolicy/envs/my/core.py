@@ -56,7 +56,6 @@ class AgentState(EntityState):
 
         self.epi_energy = 0
         self.finish = False
-        self.local_remain_time = 0.0
 
 class ServerState(EntityState):
     def __init__(self):
@@ -184,7 +183,7 @@ class MecWorld(object):
         self.dim_task_size = 1  # 任务量维度
         self.dim_task_type = 1  # task type dimensionality
         # simulation timestep
-        self.slot_time = 0.05  # 模拟的时间步长
+        self.slot_time = 2  # 模拟的时间步长
         self.time = 0  # simulation time
         self.max_time = 1000  # maximum time for one episode
 
@@ -246,15 +245,27 @@ class MecWorld(object):
         self.time += 1
 
         # update agent state
-        self._ended_agents_ids_step = []  # 记录在当前时间步里“任务已结束”的智能体 ID（结束包括边缘端执行完成或失败）
+        self._ended_agents_ids_step = []  # 记录在当前时间步里“任务已结束”的智能体 ID（结束包括执行完成或失败）
+
         for agent in self.agents:
             self.update_agent_position_state(agent)
             self.update_conn_state()
             self.update_agent_channel_state(agent)
             self.update_agent_task_state(agent)
             self.update_agent_action_state(agent)
+
+        # agent按照边缘/本地的策略完成处理
+        for agent in self.agents:
+            if agent.action.local == 1:
+                self.local_cost(agent)
+            else:
+                self.edge_cost(agent)
+
+        # 服务器处理任务
         for s in self.servers:
-            s.priority_server.process_time_slot()  # 此时没任务
+            s.priority_server.process_time_slot()
+
+        # 检查任务结果
         for agent in self.agents:
             if agent.pending_offload_task_id and agent.pending_server_id:
                 s = self.servers[agent.pending_server_id - 1]
@@ -287,21 +298,6 @@ class MecWorld(object):
                             self._ended_agents_ids_step.append(agent.id)
                             done = True
                             break
-                # if done:
-                #     agent.pending_offload_task_id = None
-                #     agent.pending_server_id = None
-
-            # 处理本地执行的任务
-            elif agent.task._state == 1 and agent.pending_offload_task_id is None:
-                agent.state.local_remain_time -= self.slot_time
-                if agent.state.local_remain_time <= 0:
-                    # 任务完成，检查是否超时
-                    if agent.state.time_cur > agent.task.delay_tol:
-                        agent.task._state = 3
-                    else:
-                        agent.task._state = 2
-                    self._ended_agents_ids_step.append(agent.id)
-                    agent.state.local_remain_time = 0.0
 
         for agent in self.agents:
             u = self.agent_utility(agent)
@@ -379,9 +375,6 @@ class MecWorld(object):
         agent.state.task_q_left = 0
 
     def local_cost(self, agent: MecAgent):
-        # 如果已经在本地执行（状态为1且没有 pending offload），则直接返回0，不重复计算
-        if agent.task._state == 1:
-            return 0.0, 0.0
 
         agent.task.offloading_target = 'local'
 
@@ -392,11 +385,13 @@ class MecWorld(object):
         agent.state.time_cur = t_cost
         agent.state.energy_cur = e_cost
         agent.state.epi_energy = e_cost
-        
-        # 启动本地执行：设置为状态1，记录剩余时间
-        agent.task._state = 1
-        agent.state.local_remain_time = t_cost
-        # 不立即完成，交由 step 中的循环处理倒计时
+
+        if agent.state.time_cur > agent.task.delay_tol:
+            agent.task._state = 3
+        else:
+            agent.task._state = 2
+
+        self._ended_agents_ids_step.append(agent.id)
 
         return t_cost, e_cost
 

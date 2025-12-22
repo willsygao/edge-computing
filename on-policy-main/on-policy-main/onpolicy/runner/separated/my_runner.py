@@ -66,6 +66,23 @@ class MECRunner(Runner):
             # post process
             total_num_steps = (episode + 1) * self.episode_length * self.n_rollout_threads
             
+            if hasattr(self, 'envs') and hasattr(self.envs, 'envs') and len(getattr(self.envs, 'envs')) > 0:
+                try:
+                    vis = getattr(self.envs.envs[0].world, 'visualizer', None)
+                    if vis is not None and hasattr(vis, 'compute_fail_stats_over_episodes'):
+                        fail_counts, fail_means = vis.compute_fail_stats_over_episodes(self.episode_length)
+                        if len(fail_counts) > 0:
+                            cur_count = int(fail_counts[-1])
+                            cur_mean = float(fail_means[-1]) if len(fail_means) > 0 else float(cur_count)
+                            if self.use_wandb:
+                                wandb.log({'failure/fail_count_episode': cur_count, 'failure/fail_mean_over_episodes': cur_mean}, step=total_num_steps)
+                            else:
+                                self.writter.add_scalars('failure', {'failure/fail_count_episode': cur_count, 'failure/fail_mean_over_episodes': cur_mean}, total_num_steps)
+                            if hasattr(vis, 'render_fail_mean_over_episodes'):
+                                vis.render_fail_mean_over_episodes(fail_counts, fail_means)
+                except Exception:
+                    pass
+            
             # save model
             if (episode % self.save_interval == 0 or episode == episodes - 1):
                 self.save()

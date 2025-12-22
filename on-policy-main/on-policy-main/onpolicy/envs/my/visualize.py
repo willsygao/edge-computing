@@ -237,3 +237,73 @@ class QueueVisualizer:
             plt.close()
             if self.use_wandb and wandb is not None:
                 wandb.log({'agent_status_bar': wandb.Image(agent_bar_path)}, step=self._last_time)
+
+    def compute_fail_stats_over_episodes(self, episode_length: int, window: int = None):
+        if not self.history or episode_length <= 0:
+            return [], []
+        servers = sorted(self.history.keys())
+        max_time = 0
+        for sid in servers:
+            h = self.history[sid]
+            if h['time']:
+                max_time = max(max_time, int(h['time'][-1]))
+        total_episodes = (max_time // episode_length) + 1 if max_time > 0 else 1
+        fail_counts = []
+        for epi in range(total_episodes):
+            t_start = epi * episode_length
+            t_end = (epi + 1) * episode_length
+            inc_sum = 0
+            for sid in servers:
+                h = self.history[sid]
+                times = h['time']
+                fails = h['failed']
+                if not times:
+                    continue
+                start_val = 0
+                end_val = 0
+                for i in range(len(times) - 1, -1, -1):
+                    if times[i] <= t_start:
+                        start_val = int(fails[i])
+                        break
+                for i in range(len(times) - 1, -1, -1):
+                    if times[i] < t_end:
+                        end_val = int(fails[i])
+                        break
+                inc = max(0, end_val - start_val)
+                inc_sum += inc
+            fail_counts.append(int(inc_sum))
+        means = []
+        if window is None or window <= 1:
+            s = 0.0
+            for i, v in enumerate(fail_counts):
+                s += float(v)
+                means.append(s / float(i + 1))
+        else:
+            for i in range(len(fail_counts)):
+                left = max(0, i + 1 - window)
+                chunk = fail_counts[left:i + 1]
+                if chunk:
+                    means.append(float(sum(chunk)) / float(len(chunk)))
+                else:
+                    means.append(0.0)
+        return fail_counts, means
+
+    def render_fail_mean_over_episodes(self, fail_counts: list, fail_means: list):
+        if not fail_counts:
+            return None
+        x = list(range(1, len(fail_counts) + 1))
+        plt.figure(figsize=(10, 6))
+        plt.plot(x, fail_counts, label='Fail Count / Episode', color='red')
+        if fail_means:
+            plt.plot(x, fail_means, label='Mean Fail (cum or window)', color='blue')
+        plt.xlabel('Episode')
+        plt.ylabel('Failures')
+        plt.title('Failures per Episode and Mean')
+        plt.legend()
+        plt.tight_layout()
+        path = os.path.join(self.out_dir, 'failure_mean_over_episodes.png')
+        plt.savefig(path, dpi=self.dpi)
+        plt.close()
+        if self.use_wandb and wandb is not None:
+            wandb.log({'failure_mean_over_episodes': wandb.Image(path)}, step=self._last_time)
+        return path

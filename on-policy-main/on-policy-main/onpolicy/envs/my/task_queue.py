@@ -339,8 +339,7 @@ class PriorityQueueServer:
             allocated_resources = self._allocate_resources()
 
             # 处理任务
-            completed_tasks.append(self._process_tasks(allocated_resources, rest_time))
-            pass
+            completed_tasks.extend(self._process_tasks(allocated_resources, rest_time))
 
         return completed_tasks
 
@@ -388,20 +387,16 @@ class PriorityQueueServer:
         处理一个时隙
         返回本时隙完成的任务列表
         """
-        self.current_slot += 1
-        self.total_processing_slots += 1
-        self.energy_last_slot = 0.0
-
-        # 更新任务优先级（因为时间变化）
-        self._update_task_priorities()
-
-        # 分配资源
-        allocated_resources = self._allocate_resources()
-
-        # 处理任务，这里计算一下能耗，最后任务完成时将统计出来的任务移交core
-        completed_tasks = self._process_tasks(allocated_resources, self.slot_time)
-
-        return completed_tasks
+        completed_tasks_all: List[ComputeTask] = []
+        while len(self._get_all_tasks()) > 0:
+            self.current_slot += 1
+            self.total_processing_slots += 1
+            self.energy_last_slot = 0.0
+            self._update_task_priorities()
+            allocated_resources = self._allocate_resources()
+            completed_tasks = self._process_tasks(allocated_resources, self.slot_time)
+            completed_tasks_all.extend(completed_tasks)
+        return completed_tasks_all
 
     def get_queue_status(self) -> Dict[str, Any]:
         status = {

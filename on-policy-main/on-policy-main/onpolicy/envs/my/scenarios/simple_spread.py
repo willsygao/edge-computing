@@ -113,16 +113,17 @@ class Scenario(BaseScenario):
     @staticmethod
     def reward(agent: MecAgent, world: MecWorld):
         # return -agent.state.time_cur
+        # og = float(world._cache_og_total) if hasattr(world, '_cache_og_total') and world._cache_og_total is not None else 0.0
 
-        og = float(world._cache_og_total) if hasattr(world, '_cache_og_total') and world._cache_og_total is not None else 0.0
         ended_ids = getattr(world, '_ended_agents_ids_step', []) if hasattr(world, '_ended_agents_ids_step') else []
         fail_pen = float(getattr(world, 'fail_penalty', 1.0)) if agent.id in ended_ids and getattr(agent.task, '_state', None) == 3 else 0.0
 
         if fail_pen > 0:
             print(f"agent：{agent.id}任务失败，时延为：{agent.state.time_cur}，容忍度为：{agent.task.delay_tol}，任务处理方式为：{agent.task.offloading_target}")
-        # print(f"agent：{agent.id}奖励为：{og - fail_pen}")
+        else:
+            print(f"agent：{agent.id}任务成功，时延为：{agent.state.time_cur}，容忍度为：{agent.task.delay_tol}，任务处理方式为：{agent.task.offloading_target}")
 
-        return og - fail_pen
+        return -agent.state.time_cur - fail_pen
 
     @staticmethod
     def observation(agent: MecAgent, world: MecWorld):

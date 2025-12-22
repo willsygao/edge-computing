@@ -93,36 +93,17 @@ class MultiAgentMecEnv(gym.Env):
         self.world.step()
 
         for i, agent in enumerate(self.agents):
-            # if agent.task._state == 0 and sum(agent.action.offload) > 0:
-            if agent.task._state == 0 and sum(action_n[i][1:self.world.num_servers + 1]) > 0:
+            if sum(action_n[i][1:self.world.num_servers + 1]) > 0:
                 assert sum(action_n[i][1:self.world.num_servers + 1]) == 1
                 offload_s_id = int(np.argmax(agent.action.offload) + 1)
-                self.world.edge_cost(agent)
                 action_type = 1
                 trans_rate = float(agent.state.trans_rate) if agent.state.trans_rate is not None else 0.0
                 p_weight = float(agent.state.trans_pow)
-            # elif agent.task._state == 0 and sum(agent.action.offload) == 0:
-            elif agent.task._state == 0 and sum(action_n[i][1:self.world.num_servers + 1]) == 0:
+            else:
                 offload_s_id = 0
-                self.world.local_cost(agent)
-                # if not hasattr(self.world, '_ended_agents_ids_step'):
-                #     self.world._ended_agents_ids_step = []
-                # if agent.id not in self.world._ended_agents_ids_step:
-                #     self.world._ended_agents_ids_step.append(agent.id)
                 action_type = 0
                 trans_rate = 0.0
                 p_weight = 1.0
-            else:
-                if agent.task.offloading_target == 'edge':
-                    action_type = 1
-                    offload_s_id = int(np.argmax(agent.action.offload) + 1)
-                    trans_rate = float(agent.state.trans_rate) if agent.state.trans_rate is not None else 0.0
-                    p_weight = float(agent.state.trans_pow)
-                else:
-                    action_type = 0
-                    trans_rate = 0.0
-                    p_weight = 1.0
-                    offload_s_id = 0
             obs_n.append(self._get_obs(agent))
             done_n.append(self._get_done(agent))
             trade_lambda = float(self.world.trade_lambda) if hasattr(self.world, 'trade_lambda') and self.world.trade_lambda is not None else 0.0
