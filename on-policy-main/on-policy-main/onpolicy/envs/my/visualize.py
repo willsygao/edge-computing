@@ -218,7 +218,7 @@ class QueueVisualizer:
                 log_payload['agent_utility_over_time'] = wandb.Image(au_path)
             if 'og_path' in locals():
                 log_payload['og_total_over_time'] = wandb.Image(og_path)
-            wandb.log(log_payload, step=self._last_time)
+            wandb.log(log_payload, commit=False)
 
         if hasattr(self, 'agent_stats') and self.agent_stats:
             aids = sorted(self.agent_stats.keys())
@@ -236,7 +236,7 @@ class QueueVisualizer:
             plt.savefig(agent_bar_path, dpi=self.dpi)
             plt.close()
             if self.use_wandb and wandb is not None:
-                wandb.log({'agent_status_bar': wandb.Image(agent_bar_path)}, step=self._last_time)
+                wandb.log({'agent_status_bar': wandb.Image(agent_bar_path)}, commit=False)
 
     def compute_fail_stats_over_episodes(self, episode_length: int, window: int = None):
         if not self.history or episode_length <= 0:
@@ -305,5 +305,12 @@ class QueueVisualizer:
         plt.savefig(path, dpi=self.dpi)
         plt.close()
         if self.use_wandb and wandb is not None:
-            wandb.log({'failure_mean_over_episodes': wandb.Image(path)}, step=self._last_time)
+            wandb.log({'failure_mean_over_episodes': wandb.Image(path)}, commit=False)
         return path
+
+    def reset(self):
+        self._last_counts = {}
+        self.history = {}
+        self._last_time = 0
+        self.agent_stats = {}
+        self.global_metrics = {'time': [], 'agent_utility_mean': [], 'og_total': []}

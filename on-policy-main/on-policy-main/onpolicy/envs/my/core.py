@@ -16,10 +16,11 @@ class Task:
         self._state = 0  # 0 ：初始/新任务, 1 ：已提交到边缘，执行中, 2 ：完成本地计算, 3 ：任务失败
         self.input_data = int(np.random.randint(400, 1000))  # 单位：KB
         self.exe_data = float(np.random.uniform(1.6e9, 4e9))  # 单位：cycles
-        self.delay_tol = float(np.random.uniform(0.3, 5.0))  # 单位：s  0.2s以下边缘都算不完
+        self.delay_tol = float(np.random.uniform(0.3, 2.0))  # 单位：s  0.2s以下边缘都算不完
         self.type = np.random.randint(0, 2)
         self.cost_total = 0.0
         self.offloading_target = None  # 标识任务卸载目标：'local' 或 'edge'
+        self.utility_total = 0.0
 
 class EntityState(object):
     p_pos: list
@@ -103,7 +104,7 @@ class MecServer(Entity):
         self.air_rho = 1.29  # air density
         self.wing_len = 0.20  # wing area in m
         self.energy_const = 25  # 能量约束
-        self.weight = 0.5  # utility权重
+        self.weight = 0.8  # utility权重
         self.movable = False
         self.agent_dict = {}
         self.state = ServerState()
@@ -128,6 +129,10 @@ class MecServer(Entity):
             current_comp_resource=0.0
         )
         self.priority_server.add_task(t)
+
+    def reset(self):
+        self.agent_dict = {}
+        self.priority_server.reset()
 
 
 class MecAgent(Entity):
@@ -486,14 +491,15 @@ class MecWorld(object):
             c_norm = agent.state.energy_cur / agent.state.energy_const
         # 返回utility
         theta = float(self.sat_weight)
-        return theta * s_norm - (1.0 - theta) * c_norm
+        u = theta * s_norm - (1.0 - theta) * c_norm
+        return u
 
     def _server_near_deadline_total(self, server: MecServer, status: dict):
         nd = status.get('near_deadline', {})
         return float(nd.get('high', 0) + nd.get('medium', 0) + nd.get('low', 0))
 
     def server_utility(self, agent: MecAgent):
-        s_norm = agent.task.cost_total / (self.server_cost_max * self.servers[agent.pending_server_id - 1].freq)
+        s_norm = agent.task.cost_total / (self.server_cost_max * self.servers[agent.pending_server_id - 1].freq * 1e-9)
         c_norm = agent.state.energy_cur / self.servers[agent.pending_server_id - 1].energy_const
 
         util = self.servers[agent.pending_server_id - 1].weight * s_norm - (1 - self.servers[agent.pending_server_id - 1].weight) * c_norm
@@ -509,11 +515,15 @@ class MecWorld(object):
                 u_agent = self.agent_utility(agent)
                 u_server = self.server_utility(agent)
                 server_utils[agent.pending_server_id] = u_server
-                og += 1.0 * (u_agent + u_server)
+                current_util = 1.0 * (u_agent + u_server)
+                og += current_util
+                agent.task.utility_total = current_util
             else:
                 u_agent = self.agent_utility(agent)
                 # 本地不计服务器效用
-                og += 1.0 * (u_agent + 0.0)
+                current_util = 1.0 * (u_agent + 0.0)
+                og += current_util
+                agent.task.utility_total = current_util
         return og, server_utils
 
     def compute_utilities_and_update_visualizer(self):

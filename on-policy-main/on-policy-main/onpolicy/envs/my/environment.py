@@ -106,8 +106,16 @@ class MultiAgentMecEnv(gym.Env):
                 p_weight = 1.0
             obs_n.append(self._get_obs(agent))
             done_n.append(self._get_done(agent))
-            trade_lambda = float(self.world.trade_lambda) if hasattr(self.world, 'trade_lambda') and self.world.trade_lambda is not None else 0.0
-            objective_cur = float(p_weight) * (float(agent.state.energy_cur) + trade_lambda * float(agent.state.time_cur))
+            
+            # 计算 OG (Utility)
+            u_agent = self.world.agent_utility(agent)
+            u_server = 0.0
+            # 只有在任务卸载到边缘且任务已完成时，才计算服务器效用
+            if agent.task.offloading_target == 'edge' and agent.pending_server_id and getattr(agent.task, '_state', 0) == 2:
+                u_server = self.world.server_utility(agent)
+            
+            objective_cur = u_agent + u_server
+            
             env_info = [float(agent.state.epi_energy), float(agent.state.time_cur), float(objective_cur), float(action_type), float(offload_s_id), float(trans_rate)]
             info_n.append(env_info)
 
@@ -121,9 +129,10 @@ class MultiAgentMecEnv(gym.Env):
         if hasattr(self.world, 'compute_utilities_and_update_visualizer'):
             self.world.compute_utilities_and_update_visualizer()
 
-        reward = np.sum(reward_n)
-
-        reward_n = [[reward]] * self.n
+        if self.shared_reward:
+            reward = np.sum(reward_n)
+            reward_n = [[reward]] * self.n
+        
         share_obs = []
 
         avail_actions = []

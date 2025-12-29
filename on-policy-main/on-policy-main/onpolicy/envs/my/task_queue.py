@@ -384,7 +384,7 @@ class PriorityQueueServer:
 
     def process_time_slot(self) -> List[ComputeTask]:
         """
-        处理一个时隙
+        处理全部任务
         返回本时隙完成的任务列表
         """
         completed_tasks_all: List[ComputeTask] = []
@@ -422,3 +422,16 @@ class PriorityQueueServer:
             'low': int(metrics[TaskPriority.LOW]['near'])
         }
         return status
+
+    def reset(self):
+        self.priority_queues = {
+            TaskPriority.HIGH: [],
+            TaskPriority.MEDIUM: [],
+            TaskPriority.LOW: []
+        }
+        self.current_slot = 0
+        self.completed_tasks = []
+        self.failed_tasks = []
+        self.total_processing_slots = 0
+        self.queue_weights = {TaskPriority.HIGH: 1.0, TaskPriority.MEDIUM: 0.0, TaskPriority.LOW: 0.0}
+        self.energy_last_slot = 0.0

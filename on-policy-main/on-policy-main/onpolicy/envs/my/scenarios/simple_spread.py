@@ -65,6 +65,11 @@ class Scenario(BaseScenario):
         world.servers_list[1].state.p_pos = [750, 250, 15]
         world.servers_list[2].state.p_pos = [250, 750, 15]
         world.servers_list[3].state.p_pos = [750, 750, 15]
+        
+        for s in world.servers:
+            s.reset()
+        if hasattr(world, 'visualizer') and world.visualizer:
+            world.visualizer.reset()
 
         # random properties for agents
         for i in range(0, world.num_users):
@@ -113,17 +118,19 @@ class Scenario(BaseScenario):
     @staticmethod
     def reward(agent: MecAgent, world: MecWorld):
         # return -agent.state.time_cur
-        # og = float(world._cache_og_total) if hasattr(world, '_cache_og_total') and world._cache_og_total is not None else 0.0
+        og = agent.task.utility_total
 
         ended_ids = getattr(world, '_ended_agents_ids_step', []) if hasattr(world, '_ended_agents_ids_step') else []
         fail_pen = float(getattr(world, 'fail_penalty', 1.0)) if agent.id in ended_ids and getattr(agent.task, '_state', None) == 3 else 0.0
 
-        if fail_pen > 0:
-            print(f"agent：{agent.id}任务失败，时延为：{agent.state.time_cur}，容忍度为：{agent.task.delay_tol}，任务处理方式为：{agent.task.offloading_target}")
-        else:
-            print(f"agent：{agent.id}任务成功，时延为：{agent.state.time_cur}，容忍度为：{agent.task.delay_tol}，任务处理方式为：{agent.task.offloading_target}")
+        # if fail_pen > 0:
+        #     print(f"agent：{agent.id}任务失败，时延为：{agent.state.time_cur}，容忍度为：{agent.task.delay_tol}，任务处理方式为：{agent.task.offloading_target}")
+        # else:
+        #     print(f"agent：{agent.id}任务成功，时延为：{agent.state.time_cur}，容忍度为：{agent.task.delay_tol}，任务处理方式为：{agent.task.offloading_target}")
+        # return -agent.state.time_cur - fail_pen
 
-        return -agent.state.time_cur - fail_pen
+        # print(f"agent：{agent.id}任务处理方式为：{agent.task.offloading_target}，获取的og为{og}")
+        return og - fail_pen
 
     @staticmethod
     def observation(agent: MecAgent, world: MecWorld):
