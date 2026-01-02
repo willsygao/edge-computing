@@ -169,6 +169,8 @@ class MecWorld(object):
         self.y_range = 1000  # y range in meters
         self.z_range = 200  # z range in meters
 
+        self.collaborative = True
+
         # list of agents and entities (can change at execution-time!)
         self.agents = []  # 智能体列表
         self.servers = []  # MEC服务器列表
