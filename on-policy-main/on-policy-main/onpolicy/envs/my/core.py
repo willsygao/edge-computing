@@ -1,3 +1,4 @@
+import math
 from math import log
 import numpy as np
 try:
@@ -14,13 +15,17 @@ class Task:
         self._mRIndex = u_name
         self._timeIndex = tsId  # 任务到达时间
         self._state = 0  # 0 ：初始/新任务, 1 ：已提交到边缘，执行中, 2 ：完成本地计算, 3 ：任务失败
-        self.input_data = int(np.random.randint(400, 1000))  # 单位：KB
-        self.exe_data = float(np.random.uniform(1.6e9, 4e9))  # 单位：cycles
-        self.delay_tol = float(np.random.uniform(0.3, 2.0))  # 单位：s  0.2s以下边缘都算不完
+        # self.input_data = int(np.random.randint(400, 1000))  # 单位：KB
+        self.input_data = 800  # 单位：KB
+        # self.exe_data = float(np.random.uniform(1.6e9, 4e9))  # 单位：cycles
+        self.exe_data = float(3e9)  # 单位：cycles
+        # self.delay_tol = float(np.random.uniform(0.3, 2.0))
+        self.delay_tol = 1.5
         self.type = np.random.randint(0, 2)
         self.cost_total = 0.0
         self.offloading_target = None  # 标识任务卸载目标：'local' 或 'edge'
         self.utility_total = 0.0
+        self.c_norm = 0.0
 
 class EntityState(object):
     p_pos: list
@@ -56,6 +61,7 @@ class AgentState(EntityState):
         self.vir_q = 0  # virtual queue size
 
         self.epi_energy = 0
+        self.og = 0.0
         self.finish = False
 
 class ServerState(EntityState):
@@ -158,6 +164,9 @@ class MecAgent(Entity):
         self.last_utility = None
         self.agent_cost_max = 2000
 
+        self.ag_utility = 0.0
+        self.ser_utility = 0.0
+
 class MecWorld(object):
     num_users: int
     agents: list[MecAgent]
@@ -169,7 +178,7 @@ class MecWorld(object):
         self.y_range = 1000  # y range in meters
         self.z_range = 200  # z range in meters
 
-        self.collaborative = True
+        self.collaborative = False
 
         # list of agents and entities (can change at execution-time!)
         self.agents = []  # 智能体列表
@@ -232,6 +241,9 @@ class MecWorld(object):
         self.fail_penalty = 1.0
 
         self.server_cost_max = 50.0  # 服务器最大资源单价
+        
+        self.step_success_count = 0
+        self.step_fail_count = 0
 
     # return all entities in the world
     # 获取包含所有智能体对象的列表
@@ -254,9 +266,9 @@ class MecWorld(object):
         # update agent state
         self._ended_agents_ids_step = []  # 记录在当前时间步里“任务已结束”的智能体 ID（结束包括执行完成或失败）
 
+        self.update_conn_state()
         for agent in self.agents:
             self.update_agent_position_state(agent)
-            self.update_conn_state()
             self.update_agent_channel_state(agent)
             self.update_agent_task_state(agent)
             self.update_agent_action_state(agent)
@@ -268,9 +280,24 @@ class MecWorld(object):
             else:
                 self.edge_cost(agent)
 
+        # 记录每台服务器在 process_time_slot 前的状态
+        pre_stats = {}
+        for s in self.servers:
+            pre_stats[s.id] = {
+                'completed': len(s.priority_server.completed_tasks),
+                'failed': len(s.priority_server.failed_tasks)
+            }
+
         # 服务器处理任务
         for s in self.servers:
             s.priority_server.process_time_slot()
+
+        # 计算本 step 新增的成功/失败任务数
+        self.step_success_count = 0
+        self.step_fail_count = 0
+        for s in self.servers:
+            self.step_success_count += len(s.priority_server.completed_tasks) - pre_stats[s.id]['completed']
+            self.step_fail_count += len(s.priority_server.failed_tasks) - pre_stats[s.id]['failed']
 
         # 检查任务结果
         for agent in self.agents:
@@ -455,18 +482,7 @@ class MecWorld(object):
                 a.avail_action[i] = 1
             a.avail_action[0] = 1
 
-    def _get_allocated_resource(self, server: MecServer, task_id: str):
-        for p in [task_queue.TaskPriority.HIGH, task_queue.TaskPriority.MEDIUM, task_queue.TaskPriority.LOW]:
-            for e in server.priority_server.priority_queues[p]:
-                if e['task'].task_id == task_id:
-                    return float(e['task'].current_comp_resource)
-        for t in server.priority_server.completed_tasks:
-            if t.task_id == task_id:
-                return float(np.mean(t.alloc_traj)) if t.alloc_traj else 0.0
-        for t in server.priority_server.failed_tasks:
-            if t.task_id == task_id:
-                return float(np.mean(t.alloc_traj)) if t.alloc_traj else 0.0
-        return 0.0
+        return
 
     def agent_utility(self, agent: MecAgent):
         # 如果任务未完成，则为0
@@ -491,9 +507,12 @@ class MecWorld(object):
             c_norm = agent.task.cost_total / agent.agent_cost_max
         else:  # 本地
             c_norm = agent.state.energy_cur / agent.state.energy_const
+        agent.task.c_norm = c_norm
+
         # 返回utility
         theta = float(self.sat_weight)
         u = theta * s_norm - (1.0 - theta) * c_norm
+        agent.ag_utility = u
         return u
 
     def _server_near_deadline_total(self, server: MecServer, status: dict):
@@ -505,6 +524,8 @@ class MecWorld(object):
         c_norm = agent.state.energy_cur / self.servers[agent.pending_server_id - 1].energy_const
 
         util = self.servers[agent.pending_server_id - 1].weight * s_norm - (1 - self.servers[agent.pending_server_id - 1].weight) * c_norm
+
+        agent.ser_utility = util
         return util
 
     def total_objective(self):
@@ -526,6 +547,7 @@ class MecWorld(object):
                 current_util = 1.0 * (u_agent + 0.0)
                 og += current_util
                 agent.task.utility_total = current_util
+            self.compute_overall_goals(agent)
         return og, server_utils
 
     def compute_utilities_and_update_visualizer(self):
@@ -545,3 +567,17 @@ class MecWorld(object):
         ended_agents = [a for a in self.agents if hasattr(self, '_ended_agents_ids_step') and a.id in getattr(self, '_ended_agents_ids_step')]
         self._cache_agent_utils = [float(a.last_utility) if a.last_utility is not None else 0.0 for a in ended_agents]
         self._cache_og_total, self._cache_server_utils = self.total_objective()
+
+    def compute_overall_goals(self, agent: MecAgent):
+        # 权重
+        w_1 = 0.7
+        w_2 = 1 - w_1
+        k = 1
+
+        #
+        s = 1 / (1 + (math.e ** (k * (agent.state.time_cur - agent.task.delay_tol))))
+        c = agent.state.energy_cur / agent.state.energy_const
+
+        #
+        og = w_1 * s - w_2 * c
+        agent.state.og = og

@@ -22,6 +22,9 @@ class MECRunner(Runner):
 
         start = time.time()
         episodes = int(self.num_env_steps) // self.episode_length // self.n_rollout_threads
+        
+        interval_success = 0
+        interval_fail = 0
 
         for episode in range(episodes):
             if self.use_linear_lr_decay:
@@ -43,6 +46,8 @@ class MECRunner(Runner):
                     action_agents = infos_np[:, :, 3].mean(axis=0)
                     offload_ids = infos_np[:, :, 4].mean(axis=0)
                     trans_rates = infos_np[:, :, 5].mean(axis=0)
+                    ag_utilities = infos_np[:, :, 8].mean(axis=0)
+                    ser_utilities = infos_np[:, :, 9].mean(axis=0)
                     og_global = float(og_agents.sum())
                     log_dict = {"objective/OG_global": og_global}
                     for aid in range(self.num_agents):
@@ -52,7 +57,26 @@ class MECRunner(Runner):
                         log_dict[f"action/agent_{aid}"] = float(action_agents[aid])
                         log_dict[f"action/offload_s_id_{aid}"] = float(offload_ids[aid])
                         log_dict[f"net/trans_rate_agent_{aid}"] = float(trans_rates[aid])
-                    wandb.log(log_dict, step=episode * self.episode_length + step)
+                        log_dict[f"objective/ag_utility_agent_{aid}"] = float(ag_utilities[aid])
+                        log_dict[f"objective/ser_utility_agent_{aid}"] = float(ser_utilities[aid])
+                    
+                    # Accumulate failure stats
+                    step_success = infos_np[:, 0, 6].sum()
+                    step_fail = infos_np[:, 0, 7].sum()
+                    interval_success += step_success
+                    interval_fail += step_fail
+
+                    current_total_step = episode * self.episode_length + step
+                    if (current_total_step + 1) % 100 == 0:
+                        total = interval_success + interval_fail
+                        rate = interval_success / total if total > 0 else 0.0
+                        log_dict['failure/interval_success'] = float(interval_success)
+                        log_dict['failure/interval_fail'] = float(interval_fail)
+                        log_dict['failure/interval_success_rate'] = float(rate)
+                        interval_success = 0
+                        interval_fail = 0
+
+                    wandb.log(log_dict, step=current_total_step)
 
                 data = obs, shared_obs, rewards, dones, infos, available_actions, values, actions, action_log_probs, rnn_states, rnn_states_critic
                 
@@ -69,17 +93,9 @@ class MECRunner(Runner):
             if hasattr(self, 'envs') and hasattr(self.envs, 'envs') and len(getattr(self.envs, 'envs')) > 0:
                 try:
                     vis = getattr(self.envs.envs[0].world, 'visualizer', None)
-                    if vis is not None and hasattr(vis, 'compute_fail_stats_over_episodes'):
-                        fail_counts, fail_means = vis.compute_fail_stats_over_episodes(self.episode_length)
-                        if len(fail_counts) > 0:
-                            cur_count = int(fail_counts[-1])
-                            cur_mean = float(fail_means[-1]) if len(fail_means) > 0 else float(cur_count)
-                            if self.use_wandb:
-                                wandb.log({'failure/fail_count_episode': cur_count, 'failure/fail_mean_over_episodes': cur_mean}, step=total_num_steps)
-                            else:
-                                self.writter.add_scalars('failure', {'failure/fail_count_episode': cur_count, 'failure/fail_mean_over_episodes': cur_mean}, total_num_steps)
-                            if hasattr(vis, 'render_fail_mean_over_episodes'):
-                                vis.render_fail_mean_over_episodes(fail_counts, fail_means)
+                    if vis is not None and hasattr(vis, 'render_fail_mean_over_episodes'):
+                         # fail_counts, fail_means = vis.compute_fail_stats_over_episodes(self.episode_length)
+                         pass
                 except Exception:
                     pass
             

@@ -86,25 +86,25 @@ class Scenario(BaseScenario):
                 if y_choice % 2:
                     # x奇数，y奇数，从道路右侧出发
                     agent.state.p_pos[0] = 1000
-                    agent.state.p_pos[1] = np.random.uniform(500, 750)
+                    agent.state.p_pos[1] = np.random.uniform(400, 600)
                     agent.state.p_pos[2] = 0
                     agent.state.p_vel = [-10, 0, 0]
                 else:
                     # x奇数，y偶数，从道路左侧出发
                     agent.state.p_pos[0] = 0
-                    agent.state.p_pos[1] = np.random.uniform(250, 500)
+                    agent.state.p_pos[1] = np.random.uniform(400, 600)
                     agent.state.p_pos[2] = 0
                     agent.state.p_vel = [10, 0, 0]
             else:
                 if y_choice % 2:
                     # x偶数，y奇数，从道路上方出发
-                    agent.state.p_pos[0] = np.random.uniform(250, 500)
+                    agent.state.p_pos[0] = np.random.uniform(400, 600)
                     agent.state.p_pos[1] = 1000
                     agent.state.p_pos[2] = 0
                     agent.state.p_vel = [0, -10, 0]
                 else:
                     # x偶数，y偶数，从道路下方出发
-                    agent.state.p_pos[0] = np.random.uniform(500, 750)
+                    agent.state.p_pos[0] = np.random.uniform(400, 600)
                     agent.state.p_pos[1] = 0
                     agent.state.p_pos[2] = 0
                     agent.state.p_vel = [0, 10, 0]
@@ -113,23 +113,16 @@ class Scenario(BaseScenario):
             world.update_agent_channel_state(agent)
             # initial task state
             world.update_agent_task_state(agent)
-            world.update_conn_state()
+        world.update_conn_state()
 
     @staticmethod
     def reward(agent: MecAgent, world: MecWorld):
         # return -agent.state.time_cur
-        og = agent.task.utility_total
+        # og = agent.task.utility_total
+        og = agent.state.og
 
         ended_ids = getattr(world, '_ended_agents_ids_step', []) if hasattr(world, '_ended_agents_ids_step') else []
         fail_pen = float(getattr(world, 'fail_penalty', 1.0)) if agent.id in ended_ids and getattr(agent.task, '_state', None) == 3 else 0.0
-
-        # if fail_pen > 0:
-        #     print(f"agent：{agent.id}任务失败，时延为：{agent.state.time_cur}，容忍度为：{agent.task.delay_tol}，任务处理方式为：{agent.task.offloading_target}")
-        # else:
-        #     print(f"agent：{agent.id}任务成功，时延为：{agent.state.time_cur}，容忍度为：{agent.task.delay_tol}，任务处理方式为：{agent.task.offloading_target}")
-        # return -agent.state.time_cur - fail_pen
-
-        # print(f"agent：{agent.id}任务处理方式为：{agent.task.offloading_target}，获取的og为{og}")
         return og - fail_pen
 
     @staticmethod
