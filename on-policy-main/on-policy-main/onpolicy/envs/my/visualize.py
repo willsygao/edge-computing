@@ -1,5 +1,6 @@
 import os
 from typing import List, Dict
+from collections import defaultdict
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -26,6 +27,7 @@ class QueueVisualizer:
         self._last_time: int = 0
         self.use_wandb = use_wandb
         self.heatmap_window = heatmap_window
+        self.episode_counts: Dict[int, List[float]] = defaultdict(list)
 
     def update(self, servers: List, time_slot: int, agents: List = None, metrics: Dict = None):
         if not servers:
@@ -90,6 +92,8 @@ class QueueVisualizer:
     def render_summary(self):
         if not self.history:
             return
+        
+        log_payload = {}
         servers = sorted(self.history.keys())
 
         for sid in servers:
@@ -103,8 +107,8 @@ class QueueVisualizer:
             plt.title(f'Server {sid} Queue Levels Over Time')
             plt.legend()
             plt.tight_layout()
-            per_server_path = os.path.join(self.out_dir, f'server_{sid}_queues_levels.png')
-            plt.savefig(per_server_path, dpi=self.dpi)
+            if self.use_wandb and wandb is not None:
+                log_payload[f'queues_levels_S{sid}'] = wandb.Image(plt)
             plt.close()
 
         plt.figure(figsize=(10, 6))
@@ -116,8 +120,8 @@ class QueueVisualizer:
         plt.title('Queue Length Over Time')
         plt.legend()
         plt.tight_layout()
-        q_path = os.path.join(self.out_dir, 'queues_over_time.png')
-        plt.savefig(q_path, dpi=self.dpi)
+        if self.use_wandb and wandb is not None:
+            log_payload['queues_over_time'] = wandb.Image(plt)
         plt.close()
 
         # Server utility over time
@@ -130,8 +134,8 @@ class QueueVisualizer:
         plt.title('Server Utility Over Time')
         plt.legend()
         plt.tight_layout()
-        su_path = os.path.join(self.out_dir, 'server_utility_over_time.png')
-        plt.savefig(su_path, dpi=self.dpi)
+        if self.use_wandb and wandb is not None:
+            log_payload['server_utility_over_time'] = wandb.Image(plt)
         plt.close()
 
         # Agent utility mean over time
@@ -143,8 +147,8 @@ class QueueVisualizer:
             plt.title('Agent Utility Over Time')
             plt.legend()
             plt.tight_layout()
-            au_path = os.path.join(self.out_dir, 'agent_utility_over_time.png')
-            plt.savefig(au_path, dpi=self.dpi)
+            if self.use_wandb and wandb is not None:
+                log_payload['agent_utility_over_time'] = wandb.Image(plt)
             plt.close()
 
             # OG total over time
@@ -155,8 +159,8 @@ class QueueVisualizer:
             plt.title('Total Objective OG(t) Over Time')
             plt.legend()
             plt.tight_layout()
-            og_path = os.path.join(self.out_dir, 'og_total_over_time.png')
-            plt.savefig(og_path, dpi=self.dpi)
+            if self.use_wandb and wandb is not None:
+                log_payload['og_total_over_time'] = wandb.Image(plt)
             plt.close()
 
         plt.figure(figsize=(10, 6))
@@ -169,56 +173,87 @@ class QueueVisualizer:
         plt.title('Completion/Failure Over Time')
         plt.legend()
         plt.tight_layout()
-        cf_path = os.path.join(self.out_dir, 'completion_failure_over_time.png')
-        plt.savefig(cf_path, dpi=self.dpi)
+        if self.use_wandb and wandb is not None:
+            log_payload['completion_failure_over_time'] = wandb.Image(plt)
         plt.close()
 
-        times = None
-        offload_matrix = []
-        for sid in servers:
-            h = self.history[sid]
-            times = h['time'] if times is None else times
-            offload_matrix.append(h['offload'])
-        if offload_matrix:
-            min_len = min(len(row) for row in offload_matrix)
-            offload_matrix = [row[-min(self.heatmap_window, min_len):] for row in offload_matrix]
-            if times is not None:
-                times_window = times[-len(offload_matrix[0]):]
-            else:
-                times_window = list(range(len(offload_matrix[0])))
-            data = np.array(offload_matrix)
-            plt.figure(figsize=(12, 6))
-            plt.imshow(data, aspect='auto', cmap='viridis')
-            plt.colorbar(label='Offload Count')
-            plt.yticks(range(len(servers)), [f'S{sid}' for sid in servers])
-            plt.xticks(range(len(times_window)), times_window if len(times_window) <= 20 else [])
-            if len(times_window) > 20:
-                plt.xlabel(f'Time Slots (last {len(times_window)})')
-            else:
-                plt.xlabel('Time Slot')
-            plt.title('Server Load Heatmap (Offload Count)')
-            plt.tight_layout()
-            hm_path = os.path.join(self.out_dir, 'load_heatmap.png')
-            plt.savefig(hm_path, dpi=self.dpi)
-            plt.close()
+        # Heatmap: Episodes on X, Servers on Y, Offload Ratio as color
+        if self.episode_counts:
+            # Prepare matrix: rows for servers, cols for episodes
+            sids = sorted(self.episode_counts.keys())
+            if sids:
+                num_episodes = len(self.episode_counts[sids[0]])
+                # Matrix shape: (num_servers, num_episodes)
+                data_matrix = np.zeros((len(sids), num_episodes))
+                
+                for i, sid in enumerate(sids):
+                    data_matrix[i, :] = self.episode_counts[sid]
+                
+                # Normalize columns to get ratios
+                col_sums = data_matrix.sum(axis=0)
+                # Avoid division by zero
+                col_sums[col_sums == 0] = 1.0
+                ratio_matrix = data_matrix / col_sums[np.newaxis, :]
 
-        if self.use_wandb and wandb is not None:
-            log_payload = {
-                'queues_over_time': wandb.Image(q_path),
-                'completion_failure_over_time': wandb.Image(cf_path)
-            }
-            for sid in servers:
-                per_server_path = os.path.join(self.out_dir, f'server_{sid}_queues_levels.png')
-                log_payload[f'queues_levels_S{sid}'] = wandb.Image(per_server_path)
-            if 'hm_path' in locals():
-                log_payload['load_heatmap'] = wandb.Image(hm_path)
-            if os.path.exists(''+su_path):
-                log_payload['server_utility_over_time'] = wandb.Image(su_path)
-            if 'au_path' in locals():
-                log_payload['agent_utility_over_time'] = wandb.Image(au_path)
-            if 'og_path' in locals():
-                log_payload['og_total_over_time'] = wandb.Image(og_path)
-            wandb.log(log_payload, commit=False)
+                # Apply window if needed
+                if num_episodes > self.heatmap_window:
+                    plot_data = ratio_matrix[:, -self.heatmap_window:]
+                    x_indices = range(num_episodes - self.heatmap_window, num_episodes)
+                else:
+                    plot_data = ratio_matrix
+                    x_indices = range(num_episodes)
+
+                plt.figure(figsize=(12, 6))
+                plt.imshow(plot_data, aspect='auto', cmap='viridis', origin='lower')
+                plt.colorbar(label='Offload Ratio')
+                plt.yticks(range(len(sids)), [f'S{sid}' for sid in sids])
+                
+                # X-axis labels
+                if len(x_indices) > 20:
+                     tick_step = max(1, len(x_indices) // 10)
+                     tick_locs = np.arange(0, len(x_indices), tick_step)
+                     tick_labels = [str(x_indices[i]) for i in tick_locs]
+                     plt.xticks(tick_locs, tick_labels)
+                     plt.xlabel(f'Episode (last {len(x_indices)})')
+                else:
+                     plt.xticks(range(len(x_indices)), [str(i) for i in x_indices])
+                     plt.xlabel('Episode')
+
+                plt.title('Server Load Distribution per Episode')
+                plt.tight_layout()
+                if self.use_wandb and wandb is not None:
+                    log_payload['load_heatmap'] = wandb.Image(plt)
+                plt.close()
+
+                # --- NEW: Overall Load Distribution Bar Chart ---
+                total_loads = [sum(self.episode_counts[sid]) for sid in sids]
+                grand_total = sum(total_loads)
+                if grand_total > 0:
+                    percentages = [(x / grand_total) * 100.0 for x in total_loads]
+                else:
+                    percentages = [0.0] * len(sids)
+                
+                plt.figure(figsize=(8, 6))
+                bar_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728'] # Blue, Orange, Green, Red
+                if len(sids) > len(bar_colors):
+                    # Fallback if more than 4 servers
+                    bar_colors = plt.cm.tab10(np.arange(len(sids)))
+                
+                bars = plt.bar([f'S{sid}' for sid in sids], percentages, color=bar_colors[:len(sids)])
+                plt.ylabel('Load Percentage (%)')
+                plt.title(f'Overall Server Load Distribution (Total {num_episodes} Episodes)')
+                plt.ylim(0, 100) # Percentage scale
+                
+                # Add text labels on bars
+                for bar, pct in zip(bars, percentages):
+                    height = bar.get_height()
+                    plt.text(bar.get_x() + bar.get_width() / 2.0, height + 1, f'{pct:.1f}%', ha='center', va='bottom', fontsize=12, fontweight='bold')
+                
+                plt.tight_layout()
+                if self.use_wandb and wandb is not None:
+                    log_payload['overall_load_distribution'] = wandb.Image(plt)
+                plt.close()
+                # ------------------------------------------------
 
         if hasattr(self, 'agent_stats') and self.agent_stats:
             aids = sorted(self.agent_stats.keys())
@@ -232,11 +267,12 @@ class QueueVisualizer:
             plt.ylabel('Tasks')
             plt.title('Agent Task Status (Success/Failed)')
             plt.tight_layout()
-            agent_bar_path = os.path.join(self.out_dir, 'agent_status_bar.png')
-            plt.savefig(agent_bar_path, dpi=self.dpi)
-            plt.close()
             if self.use_wandb and wandb is not None:
-                wandb.log({'agent_status_bar': wandb.Image(agent_bar_path)}, commit=False)
+                log_payload['agent_status_bar'] = wandb.Image(plt)
+            plt.close()
+
+        if self.use_wandb and wandb is not None and log_payload:
+            wandb.log(log_payload, commit=False)
 
     def compute_fail_stats_over_episodes(self, episode_length: int, window: int = None):
         if not self.history or episode_length <= 0:
@@ -301,14 +337,28 @@ class QueueVisualizer:
         plt.title('Failures per Episode and Mean')
         plt.legend()
         plt.tight_layout()
-        path = os.path.join(self.out_dir, 'failure_mean_over_episodes.png')
-        plt.savefig(path, dpi=self.dpi)
-        plt.close()
         if self.use_wandb and wandb is not None:
-            wandb.log({'failure_mean_over_episodes': wandb.Image(path)}, commit=False)
-        return path
+            wandb.log({'failure_mean_over_episodes': wandb.Image(plt)}, commit=False)
+        plt.close()
+        return None
 
     def reset(self):
+        # Accumulate stats from the current history before clearing
+        if self.history:
+            servers = sorted(self.history.keys())
+            # Sum num_offload.
+            for sid in servers:
+                offloads = self.history[sid]['offload'] # List[int] or List[float]
+                total_offload = sum(offloads) if offloads else 0.0
+                self.episode_counts[sid].append(total_offload)
+            
+            # Ensure consistency
+            if self.episode_counts:
+                max_len = max(len(v) for v in self.episode_counts.values())
+                for sid in self.episode_counts:
+                    while len(self.episode_counts[sid]) < max_len:
+                        self.episode_counts[sid].append(0.0)
+
         self._last_counts = {}
         self.history = {}
         self._last_time = 0

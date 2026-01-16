@@ -115,12 +115,14 @@ class MultiAgentMecEnv(gym.Env):
                 u_server = self.world.server_utility(agent)
             
             objective_cur = u_agent + u_server
+            agent.task.utility_total = objective_cur
             
             env_info = [float(agent.state.epi_energy), float(agent.state.time_cur), float(objective_cur), float(action_type), float(offload_s_id), float(trans_rate)]
             env_info.append(float(self.world.step_success_count))
             env_info.append(float(self.world.step_fail_count))
             env_info.append(float(agent.ag_utility))
             env_info.append(float(agent.ser_utility))
+            env_info.append(float(agent.task.utility_total))
             info_n.append(env_info)
 
         if hasattr(self.world, 'compute_utilities_cache'):

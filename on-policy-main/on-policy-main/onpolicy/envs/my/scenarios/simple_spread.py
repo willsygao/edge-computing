@@ -118,8 +118,8 @@ class Scenario(BaseScenario):
     @staticmethod
     def reward(agent: MecAgent, world: MecWorld):
         # return -agent.state.time_cur
-        # og = agent.task.utility_total
-        og = agent.state.og
+        og = agent.task.utility_total
+        # og = agent.state.og
 
         ended_ids = getattr(world, '_ended_agents_ids_step', []) if hasattr(world, '_ended_agents_ids_step') else []
         fail_pen = float(getattr(world, 'fail_penalty', 1.0)) if agent.id in ended_ids and getattr(agent.task, '_state', None) == 3 else 0.0
@@ -143,7 +143,19 @@ class Scenario(BaseScenario):
                 pg_list.append(float(np.clip(pg_norm, 0.0, 1.0)))
         else:
             pg_list = [0.0] * len(world.servers_list)
-        obs = np.array([i_mb, e_gcy, tau_norm, q_left] + pg_list, dtype=np.float32)
+        
+        # Add Position and Velocity to Observation
+        # Normalize position to [0, 1] (assuming 1000x1000 map)
+        pos_x = agent.state.p_pos[0] / 1000.0
+        pos_y = agent.state.p_pos[1] / 1000.0
+        
+        # Normalize velocity (assuming max speed around 20 m/s)
+        vel_x = agent.state.p_vel[0] / 20.0
+        vel_y = agent.state.p_vel[1] / 20.0
+        
+        # Construct observation vector
+        # [InputSize, ExeSize, DelayTol, QueueLeft, PowerGains..., PosX, PosY, VelX, VelY]
+        obs = np.array([i_mb, e_gcy, tau_norm, q_left] + pg_list + [pos_x, pos_y, vel_x, vel_y], dtype=np.float32)
         obs = np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=0.0)
         return obs
 

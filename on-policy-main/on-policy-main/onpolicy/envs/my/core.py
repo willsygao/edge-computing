@@ -15,12 +15,14 @@ class Task:
         self._mRIndex = u_name
         self._timeIndex = tsId  # 任务到达时间
         self._state = 0  # 0 ：初始/新任务, 1 ：已提交到边缘，执行中, 2 ：完成本地计算, 3 ：任务失败
-        # self.input_data = int(np.random.randint(400, 1000))  # 单位：KB
-        self.input_data = 800  # 单位：KB
-        # self.exe_data = float(np.random.uniform(1.6e9, 4e9))  # 单位：cycles
-        self.exe_data = float(3e9)  # 单位：cycles
-        # self.delay_tol = float(np.random.uniform(0.3, 2.0))
-        self.delay_tol = 1.5
+        
+        # self.input_data = 800  # 单位：KB
+        # self.exe_data = float(3e9)  # 单位：cycles
+        # self.delay_tol = 1.5
+        self.input_data = int(np.random.randint(400, 1000))  # 单位：KB
+        self.exe_data = float(np.random.uniform(1.6e9, 4e9))  # 单位：cycles
+        self.delay_tol = float(np.random.uniform(0.3, 2.0))
+        
         self.type = np.random.randint(0, 2)
         self.cost_total = 0.0
         self.offloading_target = None  # 标识任务卸载目标：'local' 或 'edge'
@@ -43,8 +45,12 @@ class AgentState(EntityState):
         self.task_i_s = None  # input size
         self.task_e_s = None  # execution size
         self.task_delay_tol = None  # task deadline constraint
-        self.p_vel_mean = None
-        self.p_vel_std = None
+        self.task_delay_tol = None  # task deadline constraint
+        # Gaussian-Markov Mobility Model Parameters
+        self.mu = 0.5  # memory factor
+        self.p_vel_mean = [0, 0, 0] # mean velocity
+        self.p_vel_std = [1, 1, 0] # velocity std dev
+        self.gm_sigma = 1.0 # Gaussian noise scale
         self.power_gain = None  # 对每个BS的信道功率增益
         self.trans_rate = None  # 数据传输速率
         self.trans_pow = 0.2  # w
@@ -350,12 +356,60 @@ class MecWorld(object):
     def update_agent_position_state(self, agent: MecAgent):
         """
         update position using Gauss-Markov Mobility Model
+        v_i(t+1) = mu * v_i(t) + (1-mu) * v_mean + sqrt(1-mu^2) * sigma * N(0,1)
+        l_i(t+1) = l_i(t) + v_i(t) * tau
         """
         s = agent.state
+        
+        # 1. Update Velocity
+        noise = np.random.normal(0, 1, 3) # N(0,1)
+        noise[2] = 0 # z-axis noise is 0
+        
+        mu = s.mu
+        sigma = s.gm_sigma
+        
+        # Calculate new velocity
+        for i in range(2): # only update x and y
+            # GM formula: v = mu*v + (1-mu)*mean + sqrt(1-mu^2)*sigma*noise
+            s.p_vel[i] = mu * s.p_vel[i] + \
+                         (1 - mu) * s.p_vel_mean[i] + \
+                         np.sqrt(1 - mu**2) * sigma * noise[i]
+        
+        # Cap velocity to reasonable limits (optional but good for stability)
+        max_vel = 15.0 # m/s
+        current_speed = np.sqrt(s.p_vel[0]**2 + s.p_vel[1]**2)
+        if current_speed > max_vel:
+             scale = max_vel / current_speed
+             s.p_vel[0] *= scale
+             s.p_vel[1] *= scale
+
+        # 2. Update Position
         s.p_pos[0] += s.p_vel[0] * self.slot_time
         s.p_pos[1] += s.p_vel[1] * self.slot_time
-        if (s.p_pos[0] > 1000 or s.p_pos[0] < 0) or (s.p_pos[1] > 1000 or s.p_pos[1] < 0):
-            s.finish = True
+        
+        # 3. Boundary Handling (Reflection)
+        # x-axis
+        if s.p_pos[0] < 0:
+            s.p_pos[0] = -s.p_pos[0]
+            s.p_vel[0] = -s.p_vel[0] # Reflect velocity
+            s.p_vel_mean[0] = -s.p_vel_mean[0] # Reflect mean direction
+        elif s.p_pos[0] > self.x_range:
+            s.p_pos[0] = 2 * self.x_range - s.p_pos[0]
+            s.p_vel[0] = -s.p_vel[0]
+            s.p_vel_mean[0] = -s.p_vel_mean[0]
+
+        # y-axis
+        if s.p_pos[1] < 0:
+            s.p_pos[1] = -s.p_pos[1]
+            s.p_vel[1] = -s.p_vel[1]
+            s.p_vel_mean[1] = -s.p_vel_mean[1]
+        elif s.p_pos[1] > self.y_range:
+            s.p_pos[1] = 2 * self.y_range - s.p_pos[1]
+            s.p_vel[1] = -s.p_vel[1]
+            s.p_vel_mean[1] = -s.p_vel_mean[1]
+            
+        # Ensure z is 0 (2D plane)
+        s.p_pos[2] = 0
 
     def update_agent_action_state(self, agent: MecAgent):
         """

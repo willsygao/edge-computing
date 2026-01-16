@@ -2,7 +2,18 @@ from enum import Enum
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
+import math
+
 debug = False
+
+# DPRAS Hyperparameters
+KAPPA = 10.0
+EPSILON = 1e-5
+ALPHA = 1.0
+BETA = 0.5
+C_MAX_PRE = 5e9 # Predefined max computation ( 5G cycles)
+S_TH_HIGH = 3.0
+S_TH_MID = 1.5
 
 class TaskPriority(Enum):
     """任务优先级枚举"""
@@ -55,39 +66,44 @@ class TaskPriorityEvaluator:
     @staticmethod
     def calculate_urgency_score(task: ComputeTask, current_slot: int) -> float:
         """
-        计算任务紧急度分数
-        基于剩余容忍时隙比例
+        计算任务紧急度分数 (Logarithmic Model)
+        F_urg(t) = ln(1 + K / (t_dl - t + epsilon))
         """
         time_elapsed = current_slot - task.creation_slot
         time_remaining = task.max_tolerance_delay - time_elapsed
 
-        if time_remaining <= 0:
-            # 任务已超时，返回最高紧急度
-            return 1.0
-        else:
-            # 基于剩余时间比例计算紧急度
-            urgency_score = 1.0 - (time_remaining / task.max_tolerance_delay)
-            return max(0.0, min(1.0, urgency_score))
+        # Formula: ln(1 + K / (remaining + epsilon))
+        # Note: time_remaining is in slots. 
+        val = 1 + (KAPPA / (max(0, time_remaining) + EPSILON))
+        return math.log(val)
 
     @staticmethod
     def calculate_resource_score(task: ComputeTask) -> float:
         """
         计算资源需求分数
-        使用剩余计算量作为资源需求指标
+        F_dem(t) = c_req(t) / c_max_pre
         """
-        return task.remaining_computation
+        return task.remaining_computation / C_MAX_PRE
+
+    @staticmethod
+    def calculate_composite_score(task: ComputeTask, current_slot: int) -> float:
+        """
+        计算综合优先级评分
+        S_i(t) = alpha * F_urg - beta * F_dem
+        """
+        f_urg = TaskPriorityEvaluator.calculate_urgency_score(task, current_slot)
+        f_dem = TaskPriorityEvaluator.calculate_resource_score(task)
+        return ALPHA * f_urg - BETA * f_dem
 
     @staticmethod
     def determine_priority(task: ComputeTask, current_slot: int) -> TaskPriority:
         """确定任务优先级"""
-        urgency_score = TaskPriorityEvaluator.calculate_urgency_score(task, current_slot)
-
-        composite_score = urgency_score
+        composite_score = TaskPriorityEvaluator.calculate_composite_score(task, current_slot)
 
         # 根据综合评分划分优先级
-        if composite_score >= 0.7:
+        if composite_score >= S_TH_HIGH:
             return TaskPriority.HIGH
-        elif composite_score >= 0.4:
+        elif composite_score >= S_TH_MID:
             return TaskPriority.MEDIUM
         else:
             return TaskPriority.LOW
@@ -155,7 +171,8 @@ class PriorityQueueServer:
             'agent_id': task.agent_id,
             'arrival_slot': self.current_slot,
             'priority': priority,
-            'resource_score': TaskPriorityEvaluator.calculate_resource_score(task)
+            'resource_score': TaskPriorityEvaluator.calculate_resource_score(task),
+            'composite_score': TaskPriorityEvaluator.calculate_composite_score(task, self.current_slot)
         }
 
         # 添加到对应优先级队列
@@ -209,26 +226,31 @@ class PriorityQueueServer:
         return metrics
 
     def _compute_queue_weights(self) -> Dict[TaskPriority, float]:
-        m = self._compute_queue_metrics()
-        total_len = sum(m[p]['len'] for p in m)
-        total_near = sum(m[p]['near'] for p in m)
-        def ratio(x, total):
-            return (x / total) if total > 0 else 0.0
+        """
+        计算动态队列权重 (Dynamic WRR)
+        rho_m(t) = Sum(S_i + epsilon) / Sum_All(Sum(S_i + epsilon))
+        """
+        # Calculate Accumulated Priority Score for each queue
+        queue_scores = {p: 0.0 for p in [TaskPriority.HIGH, TaskPriority.MEDIUM, TaskPriority.LOW]}
+        
+        for p in queue_scores:
+            for entry in self.priority_queues[p]:
+                # Recalculate score for current moment
+                s = TaskPriorityEvaluator.calculate_composite_score(entry['task'], self.current_slot)
+                queue_scores[p] += (s + EPSILON)
+            # Add a small base epsilon even if queue is empty to avoid zero division/starvation if logic changes
+            if len(self.priority_queues[p]) == 0:
+                 queue_scores[p] = EPSILON
+
+        total_score = sum(queue_scores.values())
+        
         w = {}
-        for p in [TaskPriority.HIGH, TaskPriority.MEDIUM, TaskPriority.LOW]:
-            r_len = ratio(m[p]['len'], total_len)
-            r_near = ratio(m[p]['near'], total_near)
-            base = 0.1
-            if p == TaskPriority.HIGH:
-                score = 0.6 * r_near + 0.4 * r_len
-            elif p == TaskPriority.MEDIUM:
-                score = 0.3 * r_near + 0.4 * r_len
-            else:
-                score = 0.1 * r_near + 0.2 * r_len
-            w[p] = max(base, score)
-        s = sum(w.values())
-        for p in w:
-            w[p] = w[p] / s if s > 0 else (1.0 if p == TaskPriority.HIGH else 0.0)
+        if total_score > 0:
+            for p in queue_scores:
+                w[p] = queue_scores[p] / total_score
+        else:
+             w = {TaskPriority.HIGH: 0.8, TaskPriority.MEDIUM: 0.15, TaskPriority.LOW: 0.05}
+
         self.queue_weights = w
         return w
 
@@ -376,7 +398,8 @@ class PriorityQueueServer:
                 'agent_id': task.agent_id,
                 'arrival_slot': task_entry['arrival_slot'],
                 'priority': new_priority,
-                'resource_score': TaskPriorityEvaluator.calculate_resource_score(task)
+                'resource_score': TaskPriorityEvaluator.calculate_resource_score(task),
+                'composite_score': TaskPriorityEvaluator.calculate_composite_score(task, self.current_slot)
             }
 
             # 添加到新优先级队列
