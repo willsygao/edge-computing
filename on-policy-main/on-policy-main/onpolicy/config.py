@@ -158,10 +158,13 @@ def get_config():
 
     # prepare parameters
     parser.add_argument("--algorithm_name", type=str,
-                        default='ippo', choices=["rmappo", "mappo", "happo", "hatrpo", "mat", "mat_dec", "ippo"])
+                        default='mappo', choices=["rmappo", "mappo", "ippo", "maddpg", "local", "random", "greedy"], help="Which algorithm to run. mappo, rmappo, ippo, maddpg, local, random, greedy")
+    parser.add_argument("--use_attention", action='store_true', default=True, help="Whether to use attention mechanism in Critic")
 
     parser.add_argument("--experiment_name", type=str, default="check", help="an identifier to distinguish different experiment.")
+    # 实验的时候改seed
     parser.add_argument("--seed", type=int, default=1, help="Random seed for numpy/torch")
+    
     parser.add_argument("--cuda", action='store_false', default=True, help="by default True, will use GPU to train; or else will use CPU;")
     parser.add_argument("--cuda_deterministic",
                         action='store_false', default=True, help="by default, make sure random seed effective. if set, bypass such function.")
@@ -173,7 +176,7 @@ def get_config():
                         help="Number of parallel envs for evaluating rollouts")
     parser.add_argument("--n_render_rollout_threads", type=int, default=1,
                         help="Number of parallel envs for rendering rollouts")
-    parser.add_argument("--num_env_steps", type=int, default=5e5,
+    parser.add_argument("--num_env_steps", type=int, default=8e3,
                         help='Number of environment steps to train (default: 10e6)')
     parser.add_argument("--user_name", type=str, default='shuoyuan-gao0201', help="[for wandb usage], to specify user's name for simply collecting training data.")
     parser.add_argument("--use_wandb", action='store_false', default=True, help="[for wandb usage], by default True, will log date to wandb server. or else will use tensorboard to log data.")
@@ -214,6 +217,7 @@ def get_config():
     # recurrent parameters
     parser.add_argument("--use_naive_recurrent_policy", action='store_true',
                         default=False, help='Whether to use a naive recurrent policy')
+    # LSTM
     parser.add_argument("--use_recurrent_policy", action='store_false',
                         default=True, help='use a recurrent policy')
     parser.add_argument("--recurrent_N", type=int, default=1, help="The number of recurrent layers.")
