@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import sys
 import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -79,6 +80,20 @@ def main(args):
     elif all_args.algorithm_name == "ippo":
         print("u are choosing to use ippo, we set use_centralized_V to be False")
         all_args.use_centralized_V = False
+        print("u are choosing to use ippo, we set use_recurrent_policy & use_naive_recurrent_policy to be False")
+        all_args.use_recurrent_policy = False 
+        all_args.use_naive_recurrent_policy = False
+    elif all_args.algorithm_name == "maddpg":
+        print("u are choosing to use maddpg, we set use_recurrent_policy & use_naive_recurrent_policy to be False")
+        all_args.use_recurrent_policy = False 
+        all_args.use_naive_recurrent_policy = False
+        all_args.use_valuenorm = False
+        all_args.use_popart = False
+        all_args.use_gae = False
+    elif all_args.algorithm_name in ["local", "random", "greedy"]:
+        print(f"u are choosing to use {all_args.algorithm_name} benchmark.")
+        all_args.use_recurrent_policy = False 
+        all_args.use_naive_recurrent_policy = False
     else:
         raise NotImplementedError
 

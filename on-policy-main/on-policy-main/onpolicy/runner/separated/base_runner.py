@@ -73,6 +73,9 @@ class Runner(object):
         elif self.all_args.algorithm_name == "hatrpo":
             from onpolicy.algorithms.hatrpo.hatrpo_trainer import HATRPO as TrainAlgo
             from onpolicy.algorithms.hatrpo.policy import HATRPO_Policy as Policy
+        elif self.all_args.algorithm_name == "maddpg":
+            from onpolicy.algorithms.maddpg.maddpg import MADDPG as TrainAlgo
+            from onpolicy.algorithms.maddpg.maddpg_policy import MADDPGPolicy as Policy
         else:
             from onpolicy.algorithms.r_mappo.r_mappo import R_MAPPO as TrainAlgo
             from onpolicy.algorithms.r_mappo.algorithm.rMAPPOPolicy import R_MAPPOPolicy as Policy
@@ -145,6 +148,12 @@ class Runner(object):
             available_actions = None if self.buffer[agent_id].available_actions is None \
                 else self.buffer[agent_id].available_actions[:-1].reshape(-1, *self.buffer[agent_id].available_actions.shape[2:])
             
+            if self.all_args.algorithm_name == "maddpg":
+                 train_info = self.trainer[agent_id].train(self.buffer[agent_id])
+                 train_infos.append(train_info)
+                 self.buffer[agent_id].after_update()
+                 continue
+
             if self.all_args.algorithm_name == "hatrpo":
                 old_actions_logprob, _, _, _, _ =self.trainer[agent_id].policy.actor.evaluate_actions(self.buffer[agent_id].obs[:-1].reshape(-1, *self.buffer[agent_id].obs.shape[2:]),
                                                             self.buffer[agent_id].rnn_states[0:1].reshape(-1, *self.buffer[agent_id].rnn_states.shape[2:]),

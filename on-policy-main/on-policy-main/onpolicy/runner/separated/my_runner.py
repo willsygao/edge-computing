@@ -33,7 +33,14 @@ class MECRunner(Runner):
 
             for step in range(self.episode_length):
                 # Sample actions
-                values, actions, action_log_probs, rnn_states, rnn_states_critic, actions_env = self.collect(step)
+                if self.algorithm_name == "local":
+                    values, actions, action_log_probs, rnn_states, rnn_states_critic, actions_env = self.collect_local(step)
+                elif self.algorithm_name == "random":
+                    values, actions, action_log_probs, rnn_states, rnn_states_critic, actions_env = self.collect_random(step)
+                elif self.algorithm_name == "greedy":
+                    values, actions, action_log_probs, rnn_states, rnn_states_critic, actions_env = self.collect_greedy(step)
+                else:
+                    values, actions, action_log_probs, rnn_states, rnn_states_critic, actions_env = self.collect(step)
                     
                 # Obser reward and next obs
                 obs, shared_obs, rewards, dones, infos, available_actions = self.envs.step(actions_env)
@@ -48,6 +55,7 @@ class MECRunner(Runner):
                     trans_rates = infos_np[:, :, 5].mean(axis=0)
                     ag_utilities = infos_np[:, :, 8].mean(axis=0)
                     ser_utilities = infos_np[:, :, 9].mean(axis=0)
+                    utility_totals = infos_np[:, :, 10].mean(axis=0)
                     og_global = float(og_agents.sum())
                     log_dict = {"objective/OG_global": og_global}
                     for aid in range(self.num_agents):
@@ -59,6 +67,7 @@ class MECRunner(Runner):
                         log_dict[f"net/trans_rate_agent_{aid}"] = float(trans_rates[aid])
                         log_dict[f"objective/ag_utility_agent_{aid}"] = float(ag_utilities[aid])
                         log_dict[f"objective/ser_utility_agent_{aid}"] = float(ser_utilities[aid])
+                        log_dict[f"objective/utility_total_agent_{aid}"] = float(utility_totals[aid])
                     
                     # Accumulate failure stats
                     step_success = infos_np[:, 0, 6].sum()
@@ -123,6 +132,7 @@ class MECRunner(Runner):
                         idv_rews = []
                         train_infos[agent_id].update({"epi_energy": infos_avg[agent_id][0]})
                         train_infos[agent_id].update({"epi_latency": infos_avg[agent_id][1]})
+                        train_infos[agent_id].update({"utility_total": infos_avg[agent_id][10]})
                         # train_infos[agent_id].update({'individual_rewards': np.mean(idv_rews)})
                         train_infos[agent_id].update({"average_episode_rewards": np.mean(self.buffer[agent_id].rewards) * self.episode_length})
                 self.log_train(train_infos, total_num_steps)
@@ -200,6 +210,99 @@ class MECRunner(Runner):
         action_log_probs = np.array(action_log_probs).transpose(1, 0, 2)
         rnn_states = np.array(rnn_states).transpose(1, 0, 2, 3)
         rnn_states_critic = np.array(rnn_states_critic).transpose(1, 0, 2, 3)
+
+        return values, actions, action_log_probs, rnn_states, rnn_states_critic, actions_env
+
+    def collect_local(self, step):
+        values = np.zeros((self.n_rollout_threads, self.num_agents, 1), dtype=np.float32)
+        actions = np.zeros((self.n_rollout_threads, self.num_agents, 1), dtype=np.int32) # 0 is local
+        action_log_probs = np.zeros((self.n_rollout_threads, self.num_agents, 1), dtype=np.float32)
+        rnn_states = np.zeros((self.n_rollout_threads, self.num_agents, self.recurrent_N, self.hidden_size), dtype=np.float32)
+        rnn_states_critic = np.zeros((self.n_rollout_threads, self.num_agents, self.recurrent_N, self.hidden_size), dtype=np.float32)
+        
+        # [envs, agents, dim]
+        # action index 0 -> local. one-hot: [1, 0, 0, 0, 0] assuming 4 servers
+        actions_env = []
+        for i in range(self.n_rollout_threads):
+            one_hot_action_env = []
+            for agent_id in range(self.num_agents):
+                # Assumes Discrete action space with size num_servers + 1
+                n_actions = self.envs.action_space[agent_id].n
+                action_one_hot = np.zeros(n_actions)
+                action_one_hot[0] = 1 # Local
+                one_hot_action_env.append(action_one_hot)
+            actions_env.append(one_hot_action_env)
+
+        return values, actions, action_log_probs, rnn_states, rnn_states_critic, actions_env
+
+    def collect_random(self, step):
+        values = np.zeros((self.n_rollout_threads, self.num_agents, 1), dtype=np.float32)
+        actions = []
+        actions_env = []
+        action_log_probs = np.zeros((self.n_rollout_threads, self.num_agents, 1), dtype=np.float32)
+        rnn_states = np.zeros((self.n_rollout_threads, self.num_agents, self.recurrent_N, self.hidden_size), dtype=np.float32)
+        rnn_states_critic = np.zeros((self.n_rollout_threads, self.num_agents, self.recurrent_N, self.hidden_size), dtype=np.float32)
+
+        # Generate per-thread, per-agent random actions
+        actions = np.zeros((self.n_rollout_threads, self.num_agents, 1), dtype=np.int32)
+        
+        for i in range(self.n_rollout_threads):
+            one_hot_action_env = []
+            for agent_id in range(self.num_agents):
+                n_actions = self.envs.action_space[agent_id].n
+                rand_act = np.random.randint(0, n_actions)
+                actions[i, agent_id, 0] = rand_act
+                
+                action_one_hot = np.zeros(n_actions)
+                action_one_hot[rand_act] = 1
+                one_hot_action_env.append(action_one_hot)
+            actions_env.append(one_hot_action_env)
+
+        return values, actions, action_log_probs, rnn_states, rnn_states_critic, actions_env
+
+    def collect_greedy(self, step):
+        values = np.zeros((self.n_rollout_threads, self.num_agents, 1), dtype=np.float32)
+        actions = np.zeros((self.n_rollout_threads, self.num_agents, 1), dtype=np.int32)
+        action_log_probs = np.zeros((self.n_rollout_threads, self.num_agents, 1), dtype=np.float32)
+        rnn_states = np.zeros((self.n_rollout_threads, self.num_agents, self.recurrent_N, self.hidden_size), dtype=np.float32)
+        rnn_states_critic = np.zeros((self.n_rollout_threads, self.num_agents, self.recurrent_N, self.hidden_size), dtype=np.float32)
+
+        # Server fixed positions
+        servers_pos = np.array([
+            [250, 250],
+            [750, 250],
+            [250, 750],
+            [750, 750]
+        ]) # indices 1, 2, 3, 4 corresponding to array indices 0, 1, 2, 3
+
+        actions_env = []
+        for i in range(self.n_rollout_threads):
+            one_hot_action_env = []
+            for agent_id in range(self.num_agents):
+                n_actions = self.envs.action_space[agent_id].n # should be 5
+                
+                # Get observation
+                # Obs structure: [..., pos_x, pos_y, vel_x, vel_y]
+                # pos is normalized by 1000.0 from simple_spread.py
+                obs = self.buffer[agent_id].obs[step][i]
+                pos_x = obs[-4] * 1000.0
+                pos_y = obs[-3] * 1000.0
+                agent_pos = np.array([pos_x, pos_y])
+
+                # Calculate distances
+                dists = np.linalg.norm(servers_pos - agent_pos, axis=1)
+                closest_server_idx = np.argmin(dists) # 0 to 3
+                
+                # Action mapping: 0 is local, 1..4 is server 1..4
+                # Greedy: always offload to nearest server
+                chosen_action = closest_server_idx + 1
+                
+                actions[i, agent_id, 0] = chosen_action
+                
+                action_one_hot = np.zeros(n_actions)
+                action_one_hot[chosen_action] = 1
+                one_hot_action_env.append(action_one_hot)
+            actions_env.append(one_hot_action_env)
 
         return values, actions, action_log_probs, rnn_states, rnn_states_critic, actions_env
 
