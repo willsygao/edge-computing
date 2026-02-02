@@ -85,9 +85,25 @@ class QueueVisualizer:
         if metrics is not None:
             if not hasattr(self, 'global_metrics'):
                 self.global_metrics = {'time': [], 'agent_utility_mean': [], 'og_total': []}
+            
+            au_mean = metrics.get('agent_utility_mean', 0.0)
+            og_tot = metrics.get('og_total', 0.0)
+
             self.global_metrics['time'].append(time_slot)
-            self.global_metrics['agent_utility_mean'].append(metrics.get('agent_utility_mean', 0.0))
-            self.global_metrics['og_total'].append(metrics.get('og_total', 0.0))
+            self.global_metrics['agent_utility_mean'].append(au_mean)
+            self.global_metrics['og_total'].append(og_tot)
+
+            if self.use_wandb and wandb is not None:
+                log_data = {
+                    'agent_utility_over_time': au_mean,
+                    'og_total_over_time': og_tot
+                }
+                if 'server_utility' in metrics:
+                    for sid, val in metrics['server_utility'].items():
+                        log_data[f'server_utility_over_time/S{sid}'] = val
+                
+                # Use commit=False to aggregate with other logs in the same step (managed by my_runner.py)
+                wandb.log(log_data, commit=False)
 
     def render_summary(self):
         if not self.history:
@@ -134,8 +150,8 @@ class QueueVisualizer:
         plt.title('Server Utility Over Time')
         plt.legend()
         plt.tight_layout()
-        if self.use_wandb and wandb is not None:
-            log_payload['server_utility_over_time'] = wandb.Image(plt)
+        # if self.use_wandb and wandb is not None:
+        #     log_payload['server_utility_over_time'] = wandb.Image(plt)
         plt.close()
 
         # Agent utility mean over time
@@ -147,8 +163,8 @@ class QueueVisualizer:
             plt.title('Agent Utility Over Time')
             plt.legend()
             plt.tight_layout()
-            if self.use_wandb and wandb is not None:
-                log_payload['agent_utility_over_time'] = wandb.Image(plt)
+            # if self.use_wandb and wandb is not None:
+            #     log_payload['agent_utility_over_time'] = wandb.Image(plt)
             plt.close()
 
             # OG total over time
@@ -159,8 +175,8 @@ class QueueVisualizer:
             plt.title('Total Objective OG(t) Over Time')
             plt.legend()
             plt.tight_layout()
-            if self.use_wandb and wandb is not None:
-                log_payload['og_total_over_time'] = wandb.Image(plt)
+            # if self.use_wandb and wandb is not None:
+            #     log_payload['og_total_over_time'] = wandb.Image(plt)
             plt.close()
 
         plt.figure(figsize=(10, 6))

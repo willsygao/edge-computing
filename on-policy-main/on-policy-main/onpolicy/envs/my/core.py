@@ -16,12 +16,12 @@ class Task:
         self._timeIndex = tsId  # 任务到达时间
         self._state = 0  # 0 ：初始/新任务, 1 ：已提交到边缘，执行中, 2 ：完成本地计算, 3 ：任务失败
         
-        # self.input_data = 800  # 单位：KB
-        # self.exe_data = float(3e9)  # 单位：cycles
-        # self.delay_tol = 1.5
-        self.input_data = int(np.random.randint(400, 1000))  # 单位：KB
-        self.exe_data = float(np.random.uniform(1.6e9, 4e9))  # 单位：cycles
-        self.delay_tol = float(np.random.uniform(0.3, 2.0))
+        self.input_data = 800  # 单位：KB
+        self.exe_data = float(3e9)  # 单位：cycles
+        self.delay_tol = 1.5
+        # self.input_data = int(np.random.randint(400, 1000))  # 单位：KB
+        # self.exe_data = float(np.random.uniform(1.6e9, 4e9))  # 单位：cycles
+        # self.delay_tol = float(np.random.uniform(0.3, 2.0))
         
         self.type = np.random.randint(0, 2)
         self.cost_total = 0.0
@@ -69,6 +69,7 @@ class AgentState(EntityState):
         self.epi_energy = 0
         self.og = 0.0
         self.finish = False
+        self.max_vel = 15.0  # Default max velocity
 
 class ServerState(EntityState):
     def __init__(self):
@@ -106,10 +107,10 @@ class MecServer(Entity):
     con_agents: dict
     state: ServerState
 
-    def __init__(self):
+    def __init__(self, freq=20.0e9):
         super(MecServer, self).__init__()
         # entity is not movable by default
-        self.freq = 20.0e9  # frequency 服务器的最大计算资源
+        self.freq = freq  # frequency 服务器的最大计算资源
         self.bandwidth = 20e6  # bandwidth
         self.com_range = 400  # communication range
         self.n_propeller = 4  # number of propellers
@@ -207,7 +208,9 @@ class MecWorld(object):
         # simulation timestep
         self.slot_time = 2  # 模拟的时间步长
         self.time = 0  # simulation time
+        self.time = 0  # simulation time
         self.max_time = 1000  # maximum time for one episode
+        self.task_input_size = 800 # Default task input size
 
         # memorability parameter
         self.m = 0.5  # 记忆性参数μ
@@ -376,7 +379,7 @@ class MecWorld(object):
                          np.sqrt(1 - mu**2) * sigma * noise[i]
         
         # Cap velocity to reasonable limits (optional but good for stability)
-        max_vel = 15.0 # m/s
+        max_vel = s.max_vel # m/s
         current_speed = np.sqrt(s.p_vel[0]**2 + s.p_vel[1]**2)
         if current_speed > max_vel:
              scale = max_vel / current_speed
@@ -453,6 +456,8 @@ class MecWorld(object):
     def update_agent_task_state(self, agent: MecAgent):
         if agent.task is None or agent.task._state in (2, 3):
             agent.task = Task(agent.name, self.time)
+            if hasattr(self, 'task_input_size'):
+                agent.task.input_data = self.task_input_size
             agent.pending_offload_task_id = None
             agent.pending_server_id = None
         t = agent.task

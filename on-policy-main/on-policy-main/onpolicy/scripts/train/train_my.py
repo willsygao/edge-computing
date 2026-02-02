@@ -59,6 +59,12 @@ def parse_args(args, parser):
     parser.add_argument("--num_landmarks", type=int, default=3)
     parser.add_argument('--num_agents', type=int,
                         default=10, help="number of players")
+    parser.add_argument('--vehicle_speed', type=float,
+                        default=10.0, help="speed of the vehicles")
+    parser.add_argument('--task_input_size', type=int,
+                        default=800, help="task input size in KB")
+    parser.add_argument('--server_freq', type=float,
+                        default=20.0, help="server frequency in GHz")
 
     all_args = parser.parse_known_args(args)[0]
 

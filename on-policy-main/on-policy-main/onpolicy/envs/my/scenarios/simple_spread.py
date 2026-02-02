@@ -18,6 +18,12 @@ class Scenario(BaseScenario):
         world.noise_in_DBm = -113
         world.bandwidth = 20e6  # 1MHz
         world.p_max = 1  # 1mW
+        world.vehicle_speed = getattr(args, 'vehicle_speed', 10.0)
+        world.task_input_size = getattr(args, 'task_input_size', 800)
+        world.server_freq_ghz = getattr(args, 'server_freq', 20.0)
+
+
+
 
         # add agents
         num_users = args.num_agents
@@ -36,7 +42,8 @@ class Scenario(BaseScenario):
         # add mec server
         num_servers = 4
         world.num_servers = num_servers
-        world.servers = [MecServer() for i in range(num_servers)]
+        server_freq = world.server_freq_ghz * 1e9
+        world.servers = [MecServer(server_freq) for i in range(num_servers)]
         mec_server: MecServer
         for i, mec_server in enumerate(world.servers):
             mec_server.name = 'UAV %d' % (i + 1)
@@ -82,36 +89,40 @@ class Scenario(BaseScenario):
             # initial users' position state
             x_choice = np.random.randint(low=0, high=10)
             y_choice = np.random.randint(low=0, high=10)
+            speed = world.vehicle_speed
+            agent.state.max_vel = speed * 1.5
             if x_choice % 2:
                 if y_choice % 2:
                     # x奇数，y奇数，从道路右侧出发
                     agent.state.p_pos[0] = 1000
                     agent.state.p_pos[1] = np.random.uniform(400, 600)
                     agent.state.p_pos[2] = 0
-                    agent.state.p_vel = [-10, 0, 0]
+                    agent.state.p_vel = [-speed, 0, 0]
                 else:
                     # x奇数，y偶数，从道路左侧出发
                     agent.state.p_pos[0] = 0
                     agent.state.p_pos[1] = np.random.uniform(400, 600)
                     agent.state.p_pos[2] = 0
-                    agent.state.p_vel = [10, 0, 0]
+                    agent.state.p_vel = [speed, 0, 0]
             else:
                 if y_choice % 2:
                     # x偶数，y奇数，从道路上方出发
                     agent.state.p_pos[0] = np.random.uniform(400, 600)
                     agent.state.p_pos[1] = 1000
                     agent.state.p_pos[2] = 0
-                    agent.state.p_vel = [0, -10, 0]
+                    agent.state.p_vel = [0, -speed, 0]
                 else:
                     # x偶数，y偶数，从道路下方出发
                     agent.state.p_pos[0] = np.random.uniform(400, 600)
                     agent.state.p_pos[1] = 0
                     agent.state.p_pos[2] = 0
-                    agent.state.p_vel = [0, 10, 0]
+                    agent.state.p_vel = [0, speed, 0]
 
             # initial channel state
             world.update_agent_channel_state(agent)
             # initial task state
+            if agent.task:
+                agent.task.input_data = world.task_input_size
             world.update_agent_task_state(agent)
         world.update_conn_state()
 
@@ -150,8 +161,9 @@ class Scenario(BaseScenario):
         pos_y = agent.state.p_pos[1] / 1000.0
         
         # Normalize velocity (assuming max speed around 20 m/s)
-        vel_x = agent.state.p_vel[0] / 20.0
-        vel_y = agent.state.p_vel[1] / 20.0
+        norm_factor = getattr(world, 'vehicle_speed', 10.0) * 2.0
+        vel_x = agent.state.p_vel[0] / norm_factor
+        vel_y = agent.state.p_vel[1] / norm_factor
         
         # Construct observation vector
         # [InputSize, ExeSize, DelayTol, QueueLeft, PowerGains..., PosX, PosY, VelX, VelY]
